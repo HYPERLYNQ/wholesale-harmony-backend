@@ -1190,7 +1190,7 @@ app.post("/api/check-login-status", async (req, res) => {
 
 // ========== GET ALL PENDING APPROVALS ==========
 
-// ========== OPTIMIZED: GET PENDING CUSTOMERS WITH PAGINATION ==========
+// ========== OPTIMIZED: GET PENDING CUSTOMERS WITH PAGINATION (REST API) ==========
 app.get("/api/admin/pending-approvals", async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -1276,35 +1276,20 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
       `📄 Page ${page}/${totalPages}: ${paginatedCustomers.length} customers`
     );
 
+    // Fetch metafields using REST API (proven method)
     const customersWithDetails = [];
 
-    if (paginatedCustomers.length > 0) {
-      const customerIds = paginatedCustomers.map(
-        (c) => `gid://shopify/Customer/${c.id}`
-      );
-
-      const query = `
-        query getCustomersMetafields($ids: [ID!]!) {
-          nodes(ids: $ids) {
-            ... on Customer {
-              id
-              metafields(first: 10) {
-                edges {
-                  node {
-                    key
-                    value
-                  }
-                }
-              }
-            }
-          }
-        }
-      `;
+    for (let i = 0; i < paginatedCustomers.length; i++) {
+      const customer = paginatedCustomers[i];
 
       try {
-        const graphqlResponse = await axios.post(
-          `https://${SHOPIFY_SHOP}/admin/api/2024-10/graphql.json`,
-          { query, variables: { ids: customerIds } },
+        // Add delay to respect rate limits
+        if (i > 0) {
+          await new Promise((resolve) => setTimeout(resolve, 150));
+        }
+
+        const metafieldsResponse = await axios.get(
+          `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customer.id}/metafields.json`,
           {
             headers: {
               "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
@@ -1313,135 +1298,73 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
           }
         );
 
-        const nodesData = graphqlResponse.data.data.nodes;
+        const metafields = metafieldsResponse.data.metafields;
+        const licenseUrl = metafields.find(
+          (m) => m.key === "license_file"
+        )?.value;
+        const studentProofUrl = metafields.find(
+          (m) => m.key === "student_proof_file"
+        )?.value;
+        const taxCertUrl = metafields.find(
+          (m) => m.key === "tax_certificate"
+        )?.value;
 
-        paginatedCustomers.forEach((customer, index) => {
-          const metafieldsData = nodesData[index]?.metafields?.edges || [];
-          const metafields = metafieldsData.map((edge) => ({
-            key: edge.node.key,
-            value: edge.node.value,
-          }));
-
-          const licenseUrl = metafields.find(
-            (m) => m.key === "license_file"
-          )?.value;
-          const studentProofUrl = metafields.find(
-            (m) => m.key === "student_proof_file"
-          )?.value;
-          const taxCertUrl = metafields.find(
-            (m) => m.key === "tax_certificate"
-          )?.value;
-
-          customersWithDetails.push({
-            id: customer.id,
-            firstName: customer.first_name,
-            lastName: customer.last_name,
-            email: customer.email,
-            phone: customer.phone,
-            createdAt: customer.created_at,
-            tags: customer.tags.split(", "),
-            note: customer.note,
-            accountType: customer.tags.includes("esthetician")
-              ? "esthetician"
-              : customer.tags.includes("salon")
-              ? "salon"
-              : customer.tags.includes("student")
-              ? "student"
-              : customer.tags.includes("consumer")
-              ? "consumer"
-              : "unknown",
-            files: {
-              license: licenseUrl,
-              studentProof: studentProofUrl,
-              taxCertificate: taxCertUrl,
-            },
-          });
+        customersWithDetails.push({
+          id: customer.id,
+          firstName: customer.first_name,
+          lastName: customer.last_name,
+          email: customer.email,
+          phone: customer.phone,
+          createdAt: customer.created_at,
+          tags: customer.tags.split(", "),
+          note: customer.note,
+          accountType: customer.tags.includes("esthetician")
+            ? "esthetician"
+            : customer.tags.includes("salon")
+            ? "salon"
+            : customer.tags.includes("student")
+            ? "student"
+            : customer.tags.includes("consumer")
+            ? "consumer"
+            : "unknown",
+          files: {
+            license: licenseUrl,
+            studentProof: studentProofUrl,
+            taxCertificate: taxCertUrl,
+          },
         });
 
         console.log(
-          `✅ GraphQL batch fetched ${customersWithDetails.length} customers`
+          `✅ Fetched metafields ${i + 1}/${paginatedCustomers.length}: ${
+            customer.email
+          }`
         );
-      } catch (graphqlError) {
+      } catch (err) {
         console.error(
-          "⚠️ GraphQL failed, using fallback:",
-          graphqlError.message
+          `⚠️ Error fetching metafields for customer ${customer.id}:`,
+          err.message
         );
 
-        for (let i = 0; i < paginatedCustomers.length; i++) {
-          const customer = paginatedCustomers[i];
-
-          try {
-            if (i > 0) await new Promise((resolve) => setTimeout(resolve, 150));
-
-            const metafieldsResponse = await axios.get(
-              `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customer.id}/metafields.json`,
-              {
-                headers: {
-                  "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
-                  "Content-Type": "application/json",
-                },
-              }
-            );
-
-            const metafields = metafieldsResponse.data.metafields;
-            const licenseUrl = metafields.find(
-              (m) => m.key === "license_file"
-            )?.value;
-            const studentProofUrl = metafields.find(
-              (m) => m.key === "student_proof_file"
-            )?.value;
-            const taxCertUrl = metafields.find(
-              (m) => m.key === "tax_certificate"
-            )?.value;
-
-            customersWithDetails.push({
-              id: customer.id,
-              firstName: customer.first_name,
-              lastName: customer.last_name,
-              email: customer.email,
-              phone: customer.phone,
-              createdAt: customer.created_at,
-              tags: customer.tags.split(", "),
-              note: customer.note,
-              accountType: customer.tags.includes("esthetician")
-                ? "esthetician"
-                : customer.tags.includes("salon")
-                ? "salon"
-                : customer.tags.includes("student")
-                ? "student"
-                : customer.tags.includes("consumer")
-                ? "consumer"
-                : "unknown",
-              files: {
-                license: licenseUrl,
-                studentProof: studentProofUrl,
-                taxCertificate: taxCertUrl,
-              },
-            });
-          } catch (err) {
-            console.error(`⚠️ Error for ${customer.email}:`, err.message);
-            customersWithDetails.push({
-              id: customer.id,
-              firstName: customer.first_name,
-              lastName: customer.last_name,
-              email: customer.email,
-              phone: customer.phone,
-              createdAt: customer.created_at,
-              tags: customer.tags.split(", "),
-              note: customer.note,
-              accountType: customer.tags.includes("esthetician")
-                ? "esthetician"
-                : customer.tags.includes("salon")
-                ? "salon"
-                : customer.tags.includes("student")
-                ? "student"
-                : customer.tags.includes("consumer")
-                ? "consumer"
-                : "unknown",
-              files: {},
-            });
-          }
-        }
+        customersWithDetails.push({
+          id: customer.id,
+          firstName: customer.first_name,
+          lastName: customer.last_name,
+          email: customer.email,
+          phone: customer.phone,
+          createdAt: customer.created_at,
+          tags: customer.tags.split(", "),
+          note: customer.note,
+          accountType: customer.tags.includes("esthetician")
+            ? "esthetician"
+            : customer.tags.includes("salon")
+            ? "salon"
+            : customer.tags.includes("student")
+            ? "student"
+            : customer.tags.includes("consumer")
+            ? "consumer"
+            : "unknown",
+          files: {},
+        });
       }
     }
 
@@ -1461,14 +1384,14 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
     if (REDIS_ENABLED && redisClient) {
       try {
         await redisClient.set(cacheKey, result, { ex: 120 });
-        console.log(`✅ Cached page ${page}`);
+        console.log(`✅ Cached page ${page} for 2 minutes`);
       } catch (cacheError) {
         console.error("⚠️ Cache write error:", cacheError.message);
       }
     }
 
     console.log(
-      `🎉 Returned page ${page} with ${customersWithDetails.length} customers`
+      `🎉 Successfully returned page ${page} with ${customersWithDetails.length} customers`
     );
     res.json(result);
   } catch (error) {
