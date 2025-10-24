@@ -1285,7 +1285,7 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
       try {
         // Add delay to respect rate limits
         if (i > 0) {
-          await new Promise((resolve) => setTimeout(resolve, 150));
+          await new Promise((resolve) => setTimeout(resolve, 135));
         }
 
         const metafieldsResponse = await axios.get(
