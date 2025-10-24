@@ -1190,7 +1190,7 @@ app.post("/api/check-login-status", async (req, res) => {
 
 // ========== GET ALL PENDING APPROVALS ==========
 
-// ========== OPTIMIZED: GET PENDING CUSTOMERS WITH PAGINATION (REST API) ==========
+// ========== OPTIMIZED: GET PENDING CUSTOMERS WITH PAGINATION + GRAPHQL ==========
 app.get("/api/admin/pending-approvals", async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -1276,20 +1276,44 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
       `📄 Page ${page}/${totalPages}: ${paginatedCustomers.length} customers`
     );
 
-    // Fetch metafields using REST API (proven method)
+    // ========== GRAPHQL BATCH FETCH (CORRECT SYNTAX) ==========
     const customersWithDetails = [];
 
-    for (let i = 0; i < paginatedCustomers.length; i++) {
-      const customer = paginatedCustomers[i];
+    if (paginatedCustomers.length > 0) {
+      const customerIds = paginatedCustomers.map(
+        (c) => `gid://shopify/Customer/${c.id}`
+      );
+
+      const query = `
+        query GetCustomersWithMetafields($ids: [ID!]!) {
+          nodes(ids: $ids) {
+            ... on Customer {
+              id
+              metafields(first: 10) {
+                edges {
+                  node {
+                    key
+                    value
+                    namespace
+                  }
+                }
+              }
+            }
+          }
+        }
+      `;
 
       try {
-        // Add delay to respect rate limits
-        if (i > 0) {
-          await new Promise((resolve) => setTimeout(resolve, 135));
-        }
+        console.log(
+          `📦 Fetching ${customerIds.length} customers with GraphQL...`
+        );
 
-        const metafieldsResponse = await axios.get(
-          `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customer.id}/metafields.json`,
+        const graphqlResponse = await axios.post(
+          `https://${SHOPIFY_SHOP}/admin/api/2024-10/graphql.json`,
+          {
+            query,
+            variables: { ids: customerIds },
+          },
           {
             headers: {
               "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
@@ -1298,73 +1322,150 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
           }
         );
 
-        const metafields = metafieldsResponse.data.metafields;
-        const licenseUrl = metafields.find(
-          (m) => m.key === "license_file"
-        )?.value;
-        const studentProofUrl = metafields.find(
-          (m) => m.key === "student_proof_file"
-        )?.value;
-        const taxCertUrl = metafields.find(
-          (m) => m.key === "tax_certificate"
-        )?.value;
+        if (graphqlResponse.data.errors) {
+          console.error(
+            "❌ GraphQL Errors:",
+            JSON.stringify(graphqlResponse.data.errors, null, 2)
+          );
+          throw new Error("GraphQL query failed");
+        }
 
-        customersWithDetails.push({
-          id: customer.id,
-          firstName: customer.first_name,
-          lastName: customer.last_name,
-          email: customer.email,
-          phone: customer.phone,
-          createdAt: customer.created_at,
-          tags: customer.tags.split(", "),
-          note: customer.note,
-          accountType: customer.tags.includes("esthetician")
-            ? "esthetician"
-            : customer.tags.includes("salon")
-            ? "salon"
-            : customer.tags.includes("student")
-            ? "student"
-            : customer.tags.includes("consumer")
-            ? "consumer"
-            : "unknown",
-          files: {
-            license: licenseUrl,
-            studentProof: studentProofUrl,
-            taxCertificate: taxCertUrl,
-          },
+        const nodesData = graphqlResponse.data.data.nodes;
+        console.log(`✅ GraphQL returned ${nodesData.length} nodes`);
+
+        paginatedCustomers.forEach((customer, index) => {
+          const node = nodesData[index];
+
+          const metafieldsEdges = node?.metafields?.edges || [];
+          const metafields = metafieldsEdges.map((edge) => edge.node);
+
+          console.log(`   ${customer.email}: ${metafields.length} metafields`);
+
+          const licenseUrl = metafields.find(
+            (m) => m.key === "license_file"
+          )?.value;
+          const studentProofUrl = metafields.find(
+            (m) => m.key === "student_proof_file"
+          )?.value;
+          const taxCertUrl = metafields.find(
+            (m) => m.key === "tax_certificate"
+          )?.value;
+
+          customersWithDetails.push({
+            id: customer.id,
+            firstName: customer.first_name,
+            lastName: customer.last_name,
+            email: customer.email,
+            phone: customer.phone,
+            createdAt: customer.created_at,
+            tags: customer.tags.split(", "),
+            note: customer.note,
+            accountType: customer.tags.includes("esthetician")
+              ? "esthetician"
+              : customer.tags.includes("salon")
+              ? "salon"
+              : customer.tags.includes("student")
+              ? "student"
+              : customer.tags.includes("consumer")
+              ? "consumer"
+              : "unknown",
+            files: {
+              license: licenseUrl,
+              studentProof: studentProofUrl,
+              taxCertificate: taxCertUrl,
+            },
+          });
         });
 
         console.log(
-          `✅ Fetched metafields ${i + 1}/${paginatedCustomers.length}: ${
-            customer.email
-          }`
+          `🎉 GraphQL batch fetch successful: ${customersWithDetails.length} customers`
         );
-      } catch (err) {
-        console.error(
-          `⚠️ Error fetching metafields for customer ${customer.id}:`,
-          err.message
-        );
+      } catch (graphqlError) {
+        console.error("⚠️ GraphQL failed:", graphqlError.message);
+        console.log("🔄 Falling back to REST API...");
 
-        customersWithDetails.push({
-          id: customer.id,
-          firstName: customer.first_name,
-          lastName: customer.last_name,
-          email: customer.email,
-          phone: customer.phone,
-          createdAt: customer.created_at,
-          tags: customer.tags.split(", "),
-          note: customer.note,
-          accountType: customer.tags.includes("esthetician")
-            ? "esthetician"
-            : customer.tags.includes("salon")
-            ? "salon"
-            : customer.tags.includes("student")
-            ? "student"
-            : customer.tags.includes("consumer")
-            ? "consumer"
-            : "unknown",
-          files: {},
-        });
+        for (let i = 0; i < paginatedCustomers.length; i++) {
+          const customer = paginatedCustomers[i];
+
+          try {
+            if (i > 0) await new Promise((resolve) => setTimeout(resolve, 100));
+
+            const metafieldsResponse = await axios.get(
+              `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customer.id}/metafields.json`,
+              {
+                headers: {
+                  "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+                  "Content-Type": "application/json",
+                },
+              }
+            );
+
+            const metafields = metafieldsResponse.data.metafields;
+            const licenseUrl = metafields.find(
+              (m) => m.key === "license_file"
+            )?.value;
+            const studentProofUrl = metafields.find(
+              (m) => m.key === "student_proof_file"
+            )?.value;
+            const taxCertUrl = metafields.find(
+              (m) => m.key === "tax_certificate"
+            )?.value;
+
+            customersWithDetails.push({
+              id: customer.id,
+              firstName: customer.first_name,
+              lastName: customer.last_name,
+              email: customer.email,
+              phone: customer.phone,
+              createdAt: customer.created_at,
+              tags: customer.tags.split(", "),
+              note: customer.note,
+              accountType: customer.tags.includes("esthetician")
+                ? "esthetician"
+                : customer.tags.includes("salon")
+                ? "salon"
+                : customer.tags.includes("student")
+                ? "student"
+                : customer.tags.includes("consumer")
+                ? "consumer"
+                : "unknown",
+              files: {
+                license: licenseUrl,
+                studentProof: studentProofUrl,
+                taxCertificate: taxCertUrl,
+              },
+            });
+
+            console.log(
+              `✅ REST fallback ${i + 1}/${paginatedCustomers.length}: ${
+                customer.email
+              }`
+            );
+          } catch (err) {
+            console.error(`⚠️ Error for ${customer.email}:`, err.message);
+
+            customersWithDetails.push({
+              id: customer.id,
+              firstName: customer.first_name,
+              lastName: customer.last_name,
+              email: customer.email,
+              phone: customer.phone,
+              createdAt: customer.created_at,
+              tags: customer.tags.split(", "),
+              note: customer.note,
+              accountType: customer.tags.includes("esthetician")
+                ? "esthetician"
+                : customer.tags.includes("salon")
+                ? "salon"
+                : customer.tags.includes("student")
+                ? "student"
+                : customer.tags.includes("consumer")
+                ? "consumer"
+                : "unknown",
+              files: {},
+            });
+          }
+        }
       }
     }
 
