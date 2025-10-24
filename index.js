@@ -1328,7 +1328,7 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
     // Cache for 2 minutes to reduce repeated API calls
     if (REDIS_ENABLED && redisClient) {
       try {
-        await redisClient.set(cacheKey, JSON.stringify(result), { ex: 120 });
+        await redisClient.set(cacheKey, result, { ex: 120 });
         console.log("✅ Cached pending approvals for 2 minutes");
       } catch (cacheError) {
         console.error("⚠️ Redis cache write error:", cacheError.message);
