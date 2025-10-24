@@ -1237,6 +1237,9 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
       case "rejected":
         tagFilter = "rejected";
         break;
+      case "archived":
+        tagFilter = "archived";
+        break;
       case "all": // 🆕 NEW: Support for "All" badge
         tagFilter = null; // Show all customers
         break;
@@ -1276,12 +1279,14 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
     // ========== ENHANCED FILTERING LOGIC ==========
     let filteredCustomers = allCustomers;
 
-    // 🆕 Exclude archived customers from all views (they'll have their own badge later if needed)
-    filteredCustomers = filteredCustomers.filter(
-      (c) => !c.tags.split(", ").includes("archived")
-    );
+    // Exclude archived customers UNLESS viewing archived filter
+    if (filter !== "archived" && filter !== "all") {
+      filteredCustomers = filteredCustomers.filter(
+        (c) => !c.tags.split(", ").includes("archived")
+      );
+    }
 
-    // Apply status filter (pending/approved/rejected/all)
+    // Apply status filter (pending/approved/rejected/archived/all)
     if (tagFilter) {
       filteredCustomers = filteredCustomers.filter((c) =>
         c.tags.split(", ").includes(tagFilter)
@@ -1549,50 +1554,109 @@ app.post("/api/admin/update-customer-status", async (req, res) => {
         reason,
         "depileveusa@gmail.com"
       );
-    }
-
-    // Update customer tags in Shopify
-    const updateResponse = await axios.put(
-      `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
-      {
-        customer: {
-          id: customerId,
-          tags: newTags.join(", "),
-        },
-      },
-      {
-        headers: {
-          "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
-          "Content-Type": "application/json",
-        },
+    } else if (action === "archive") {
+      // Add archived tag (keep other tags)
+      if (!currentTags.includes("archived")) {
+        newTags = currentTags.concat(["archived"]);
+      } else {
+        newTags = currentTags; // Already archived
       }
-    );
 
-    // Send email
-    await sendEmail({
-      to: customer.email,
-      subject: emailSubject,
-      html: emailHtml,
-    });
+      console.log(`📦 Archiving customer: ${customer.email}`);
 
-    // Clear cache
-    if (REDIS_ENABLED && redisClient) {
-      try {
-        const keys = await redisClient.keys("admin:pending-approvals:*");
-        if (keys && keys.length > 0) {
-          await Promise.all(keys.map((key) => redisClient.del(key)));
-          console.log(`🗑️ Cleared ${keys.length} cached pages`);
+      // No email for archiving
+      emailSubject = null;
+      emailHtml = null;
+    } else if (action === "delete") {
+      // Actually delete the customer from Shopify
+      console.log(`🗑️ Deleting customer: ${customer.email}`);
+
+      await axios.delete(
+        `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
+        {
+          headers: {
+            "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+            "Content-Type": "application/json",
+          },
         }
-      } catch (cacheError) {
-        console.error("⚠️ Error clearing cache:", cacheError.message);
+      );
+
+      // Clear cache
+      if (REDIS_ENABLED && redisClient) {
+        try {
+          const keys = await redisClient.keys("admin:pending-approvals:*");
+          if (keys && keys.length > 0) {
+            await Promise.all(keys.map((key) => redisClient.del(key)));
+            console.log(`🗑️ Cleared ${keys.length} cached pages`);
+          }
+        } catch (cacheError) {
+          console.error("⚠️ Error clearing cache:", cacheError.message);
+        }
       }
+
+      return res.json({
+        success: true,
+        message: "Customer deleted",
+        customerId: customerId,
+      });
+    } else {
+      return res.status(400).json({
+        success: false,
+        error: `Unknown action: ${action}`,
+      });
     }
 
-    res.json({
-      success: true,
-      message: action === "approve" ? "Customer approved" : "Customer rejected",
-      customer: updateResponse.data.customer,
-    });
+    // Update customer tags in Shopify (for approve/reject/archive)
+    if (action !== "delete") {
+      const updateResponse = await axios.put(
+        `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
+        {
+          customer: {
+            id: customerId,
+            tags: newTags.join(", "),
+          },
+        },
+        {
+          headers: {
+            "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      // Send email (if applicable)
+      if (emailSubject && emailHtml) {
+        await sendEmail({
+          to: customer.email,
+          subject: emailSubject,
+          html: emailHtml,
+        });
+      }
+
+      // Clear cache
+      if (REDIS_ENABLED && redisClient) {
+        try {
+          const keys = await redisClient.keys("admin:pending-approvals:*");
+          if (keys && keys.length > 0) {
+            await Promise.all(keys.map((key) => redisClient.del(key)));
+            console.log(`🗑️ Cleared ${keys.length} cached pages`);
+          }
+        } catch (cacheError) {
+          console.error("⚠️ Error clearing cache:", cacheError.message);
+        }
+      }
+
+      res.json({
+        success: true,
+        message:
+          action === "approve"
+            ? "Customer approved"
+            : action === "reject"
+            ? "Customer rejected"
+            : "Customer archived",
+        customer: updateResponse.data.customer,
+      });
+    }
   } catch (error) {
     console.error("❌ Error updating customer:", error.message);
     res.status(500).json({
@@ -2076,6 +2140,9 @@ app.get("/api/admin/stats", async (req, res) => {
       ).length,
       rejected: allCustomers.filter((c) =>
         c.tags.split(", ").includes("rejected")
+      ).length,
+      archived: allCustomers.filter((c) =>
+        c.tags.split(", ").includes("archived")
       ).length,
       consumers: allCustomers.filter((c) =>
         c.tags.split(", ").includes("consumer")
