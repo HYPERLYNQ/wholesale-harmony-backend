@@ -1514,6 +1514,11 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
 app.post("/api/admin/update-customer-status", async (req, res) => {
   try {
     const { customerId, action, reason } = req.body;
+    console.log(
+      `📥 Received update request - Customer: ${customerId}, Action: ${action}, Reason: ${
+        reason || "N/A"
+      }`
+    );
 
     if (!customerId || !action) {
       return res.status(400).json({ error: "Customer ID and action required" });
@@ -1554,6 +1559,10 @@ app.post("/api/admin/update-customer-status", async (req, res) => {
 
       console.log(`✅ Approving customer: ${customer.email}`);
 
+      // Set email subject for approval
+      emailSubject =
+        "🎉 Welcome to Depileve USA - Your Wholesale Account is Approved!";
+      console.log(`✅ Email subject SET for approval: "${emailSubject}"`);
       // Use your beautiful approval email template
       emailHtml = emailTemplates.getApprovalEmail(
         customer.first_name,
@@ -1568,12 +1577,22 @@ app.post("/api/admin/update-customer-status", async (req, res) => {
 
       console.log(`❌ Rejecting customer: ${customer.email}`);
 
+      // Set email subject for rejection
+      emailSubject = "Update on Your Depileve USA Application";
+      console.log(`✅ Email subject SET for rejection: "${emailSubject}"`);
+
       // Use your beautiful rejection email template
       emailHtml = emailTemplates.getRejectionEmail(
         customer.first_name,
         reason,
         "depileveusa@gmail.com"
       );
+    } else {
+      // Invalid action - shouldn't happen but be safe
+      console.error(`❌ Invalid action: ${action}`);
+      return res
+        .status(400)
+        .json({ error: "Invalid action. Must be 'approve' or 'reject'" });
     }
 
     // Update customer tags in Shopify
@@ -1592,6 +1611,18 @@ app.post("/api/admin/update-customer-status", async (req, res) => {
         },
       }
     );
+
+    // Safety check: ensure emailSubject is set
+    if (!emailSubject || !emailHtml) {
+      console.error(
+        `❌ Email subject or HTML not set! Subject: ${emailSubject}, HTML: ${
+          emailHtml ? "exists" : "missing"
+        }`
+      );
+      return res.status(500).json({ error: "Failed to prepare email" });
+    }
+
+    console.log(`📧 Preparing to send email with subject: "${emailSubject}"`);
 
     // Send email using your template
     await sendEmail({
