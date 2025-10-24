@@ -1199,7 +1199,7 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
         const cached = await redisClient.get(cacheKey);
         if (cached) {
           console.log("✅ Returning cached pending approvals");
-          return res.json(JSON.parse(cached));
+          return res.json(cached);
         }
       } catch (cacheError) {
         console.error("⚠️ Redis cache read error:", cacheError.message);
