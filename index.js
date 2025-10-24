@@ -2,7 +2,7 @@ require("dotenv").config();
 const cors = require("cors");
 const express = require("express");
 const axios = require("axios");
-const redis = require("redis");
+const { Redis } = require("@upstash/redis");
 
 const multer = require("multer");
 const fs = require("fs");
@@ -135,17 +135,15 @@ const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
 // Redis client setup
 let redisClient;
-const REDIS_ENABLED = process.env.REDIS_URL ? true : false;
+const REDIS_ENABLED =
+  process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN;
 
 if (REDIS_ENABLED) {
-  redisClient = redis.createClient({
-    url: process.env.REDIS_URL || "redis://localhost:6379",
+  redisClient = new Redis({
+    url: process.env.UPSTASH_REDIS_REST_URL,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN,
   });
-
-  redisClient.on("error", (err) => console.log("Redis Client Error", err));
-  redisClient.on("connect", () => console.log("✅ Redis connected"));
-
-  redisClient.connect();
+  console.log("✅ Upstash Redis connected");
 } else {
   console.log("⚠️ Redis not configured - caching disabled");
 }
@@ -182,7 +180,7 @@ async function setCachedResult(key, value, ttlSeconds = 300) {
   if (!REDIS_ENABLED) return;
 
   try {
-    await redisClient.setEx(key, ttlSeconds, JSON.stringify(value));
+    await redisClient.set(key, JSON.stringify(value), { ex: ttlSeconds });
     console.log(`💾 Cached: ${key} (TTL: ${ttlSeconds}s)`);
   } catch (error) {
     console.error("Redis SET error:", error);
@@ -1330,7 +1328,7 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
     // Cache for 2 minutes to reduce repeated API calls
     if (REDIS_ENABLED && redisClient) {
       try {
-        await redisClient.setEx(cacheKey, 120, JSON.stringify(result));
+        await redisClient.set(cacheKey, JSON.stringify(result), { ex: 120 });
         console.log("✅ Cached pending approvals for 2 minutes");
       } catch (cacheError) {
         console.error("⚠️ Redis cache write error:", cacheError.message);
