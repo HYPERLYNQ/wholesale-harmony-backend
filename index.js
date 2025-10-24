@@ -1266,6 +1266,11 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
       );
     }
 
+    // ✅ THIS IS THE NEW PART (3 lines added):
+    filteredCustomers.sort(
+      (a, b) => new Date(b.created_at) - new Date(a.created_at)
+    );
+
     const totalCount = filteredCustomers.length;
     const totalPages = Math.ceil(totalCount / limit);
     const startIndex = (page - 1) * limit;
