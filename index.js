@@ -201,6 +201,18 @@ async function invalidateCustomerCache(email, phone) {
   }
 }
 
+// Helper function to get MIME type
+function getMimeType(filename) {
+  const ext = path.extname(filename).toLowerCase();
+  const mimeTypes = {
+    ".pdf": "application/pdf",
+    ".jpg": "image/jpeg",
+    ".jpeg": "image/jpeg",
+    ".png": "image/png",
+  };
+  return mimeTypes[ext] || "application/octet-stream";
+}
+
 // Helper function to upload file to Shopify
 // ========== UPLOAD FILE TO SHOPIFY (PERMANENT STORAGE WITH COMPRESSION) ==========
 // ========== UPLOAD FILE TO SHOPIFY (PERMANENT STORAGE WITH COMPRESSION) ==========
@@ -1188,9 +1200,6 @@ app.post("/api/check-login-status", async (req, res) => {
   }
 });
 
-// ========== GET ALL PENDING APPROVALS ==========
-
-// ========== OPTIMIZED: GET PENDING CUSTOMERS WITH PAGINATION + GRAPHQL ==========
 app.get("/api/admin/pending-approvals", async (req, res) => {
   try {
     const page = parseInt(req.query.page) || 1;
@@ -1215,6 +1224,7 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
       `🔄 Fetching customers from Shopify (page ${page}, filter ${filter})`
     );
 
+    // ========== ENHANCED FILTER LOGIC WITH "ALL" SUPPORT ==========
     let tagFilter;
     switch (filter) {
       case "pending":
@@ -1225,6 +1235,9 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
         break;
       case "rejected":
         tagFilter = "rejected";
+        break;
+      case "all": // 🆕 NEW: Support for "All" badge
+        tagFilter = null; // Show all customers
         break;
       default:
         tagFilter = null;
@@ -1259,14 +1272,22 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
       if (allCustomers.length >= 250) hasMore = false;
     }
 
+    // ========== ENHANCED FILTERING LOGIC ==========
     let filteredCustomers = allCustomers;
+
+    // 🆕 Exclude archived customers from all views (they'll have their own badge later if needed)
+    filteredCustomers = filteredCustomers.filter(
+      (c) => !c.tags.split(", ").includes("archived")
+    );
+
+    // Apply status filter (pending/approved/rejected/all)
     if (tagFilter) {
-      filteredCustomers = allCustomers.filter((c) =>
+      filteredCustomers = filteredCustomers.filter((c) =>
         c.tags.split(", ").includes(tagFilter)
       );
     }
 
-    // ✅ THIS IS THE NEW PART (3 lines added):
+    // Sort by creation date (newest first)
     filteredCustomers.sort(
       (a, b) => new Date(b.created_at) - new Date(a.created_at)
     );
@@ -1281,7 +1302,7 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
       `📄 Page ${page}/${totalPages}: ${paginatedCustomers.length} customers`
     );
 
-    // ========== GRAPHQL BATCH FETCH (CORRECT SYNTAX) ==========
+    // ========== GRAPHQL BATCH FETCH ==========
     const customersWithDetails = [];
 
     if (paginatedCustomers.length > 0) {
@@ -1350,30 +1371,28 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
             (m) => m.key === "license_file"
           )?.value;
           const studentProofUrl = metafields.find(
-            (m) => m.key === "student_proof_file"
+            (m) => m.key === "student_proof"
           )?.value;
           const taxCertUrl = metafields.find(
             (m) => m.key === "tax_certificate"
           )?.value;
+
+          const tags = customer.tags.split(", ").filter((tag) => tag !== "");
+          let accountType = "consumer";
+          if (tags.includes("esthetician")) accountType = "esthetician";
+          else if (tags.includes("salon")) accountType = "salon";
+          else if (tags.includes("student")) accountType = "student";
 
           customersWithDetails.push({
             id: customer.id,
             firstName: customer.first_name,
             lastName: customer.last_name,
             email: customer.email,
-            phone: customer.phone,
+            phone: customer.phone || "N/A",
             createdAt: customer.created_at,
-            tags: customer.tags.split(", "),
             note: customer.note,
-            accountType: customer.tags.includes("esthetician")
-              ? "esthetician"
-              : customer.tags.includes("salon")
-              ? "salon"
-              : customer.tags.includes("student")
-              ? "student"
-              : customer.tags.includes("consumer")
-              ? "consumer"
-              : "unknown",
+            tags: tags,
+            accountType: accountType,
             files: {
               license: licenseUrl,
               studentProof: studentProofUrl,
@@ -1381,150 +1400,75 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
             },
           });
         });
-
-        console.log(
-          `🎉 GraphQL batch fetch successful: ${customersWithDetails.length} customers`
-        );
       } catch (graphqlError) {
-        console.error("⚠️ GraphQL failed:", graphqlError.message);
-        console.log("🔄 Falling back to REST API...");
+        console.error("⚠️ GraphQL batch fetch failed:", graphqlError.message);
 
-        for (let i = 0; i < paginatedCustomers.length; i++) {
-          const customer = paginatedCustomers[i];
+        paginatedCustomers.forEach((customer) => {
+          const tags = customer.tags.split(", ").filter((tag) => tag !== "");
+          let accountType = "consumer";
+          if (tags.includes("esthetician")) accountType = "esthetician";
+          else if (tags.includes("salon")) accountType = "salon";
+          else if (tags.includes("student")) accountType = "student";
 
-          try {
-            if (i > 0) await new Promise((resolve) => setTimeout(resolve, 100));
-
-            const metafieldsResponse = await axios.get(
-              `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customer.id}/metafields.json`,
-              {
-                headers: {
-                  "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
-                  "Content-Type": "application/json",
-                },
-              }
-            );
-
-            const metafields = metafieldsResponse.data.metafields;
-            const licenseUrl = metafields.find(
-              (m) => m.key === "license_file"
-            )?.value;
-            const studentProofUrl = metafields.find(
-              (m) => m.key === "student_proof_file"
-            )?.value;
-            const taxCertUrl = metafields.find(
-              (m) => m.key === "tax_certificate"
-            )?.value;
-
-            customersWithDetails.push({
-              id: customer.id,
-              firstName: customer.first_name,
-              lastName: customer.last_name,
-              email: customer.email,
-              phone: customer.phone,
-              createdAt: customer.created_at,
-              tags: customer.tags.split(", "),
-              note: customer.note,
-              accountType: customer.tags.includes("esthetician")
-                ? "esthetician"
-                : customer.tags.includes("salon")
-                ? "salon"
-                : customer.tags.includes("student")
-                ? "student"
-                : customer.tags.includes("consumer")
-                ? "consumer"
-                : "unknown",
-              files: {
-                license: licenseUrl,
-                studentProof: studentProofUrl,
-                taxCertificate: taxCertUrl,
-              },
-            });
-
-            console.log(
-              `✅ REST fallback ${i + 1}/${paginatedCustomers.length}: ${
-                customer.email
-              }`
-            );
-          } catch (err) {
-            console.error(`⚠️ Error for ${customer.email}:`, err.message);
-
-            customersWithDetails.push({
-              id: customer.id,
-              firstName: customer.first_name,
-              lastName: customer.last_name,
-              email: customer.email,
-              phone: customer.phone,
-              createdAt: customer.created_at,
-              tags: customer.tags.split(", "),
-              note: customer.note,
-              accountType: customer.tags.includes("esthetician")
-                ? "esthetician"
-                : customer.tags.includes("salon")
-                ? "salon"
-                : customer.tags.includes("student")
-                ? "student"
-                : customer.tags.includes("consumer")
-                ? "consumer"
-                : "unknown",
-              files: {},
-            });
-          }
-        }
+          customersWithDetails.push({
+            id: customer.id,
+            firstName: customer.first_name,
+            lastName: customer.last_name,
+            email: customer.email,
+            phone: customer.phone || "N/A",
+            createdAt: customer.created_at,
+            note: customer.note,
+            tags: tags,
+            accountType: accountType,
+            files: {
+              license: null,
+              studentProof: null,
+              taxCertificate: null,
+            },
+          });
+        });
       }
     }
 
-    const result = {
+    const response = {
       success: true,
       customers: customersWithDetails,
       pagination: {
         page,
         limit,
-        totalPages,
         totalCount,
-        hasNextPage: page < totalPages,
-        hasPreviousPage: page > 1,
+        totalPages,
       },
     };
 
+    // Cache the result
     if (REDIS_ENABLED && redisClient) {
       try {
-        await redisClient.set(cacheKey, result, { ex: 120 });
-        console.log(`✅ Cached page ${page} for 2 minutes`);
+        await redisClient.set(cacheKey, JSON.stringify(response), { ex: 30 });
+        console.log(`💾 Cached page ${page} (filter: ${filter}) for 30s`);
       } catch (cacheError) {
-        console.error("⚠️ Cache write error:", cacheError.message);
+        console.error("⚠️ Redis cache write error:", cacheError.message);
       }
     }
 
-    console.log(
-      `🎉 Successfully returned page ${page} with ${customersWithDetails.length} customers`
-    );
-    res.json(result);
+    res.json(response);
   } catch (error) {
-    console.error("❌ Error fetching customers:", error.message);
+    console.error("❌ Error fetching pending approvals:", error.message);
     res.status(500).json({
-      success: false,
-      error: "Failed to fetch customers",
+      error: "Failed to fetch pending approvals",
       details: error.message,
     });
   }
 });
 
-// ========== APPROVE/REJECT CUSTOMER ==========
+// ========== UPDATE CUSTOMER STATUS (APPROVE/REJECT) ==========
 app.post("/api/admin/update-customer-status", async (req, res) => {
   try {
     const { customerId, action, reason } = req.body;
-    console.log(
-      `📥 Received update request - Customer: ${customerId}, Action: ${action}, Reason: ${
-        reason || "N/A"
-      }`
-    );
 
-    if (!customerId || !action) {
-      return res.status(400).json({ error: "Customer ID and action required" });
-    }
+    console.log(`🔄 Updating customer ${customerId} to ${action}`);
 
-    // Get current customer
+    // Get customer first
     const getCustomer = await axios.get(
       `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
       {
@@ -1538,10 +1482,6 @@ app.post("/api/admin/update-customer-status", async (req, res) => {
     const customer = getCustomer.data.customer;
     const currentTags = customer.tags.split(", ").filter((tag) => tag !== "");
 
-    let newTags;
-    let emailHtml;
-    let emailSubject;
-
     // Determine account type
     const accountType = currentTags.includes("esthetician")
       ? "esthetician"
@@ -1551,6 +1491,10 @@ app.post("/api/admin/update-customer-status", async (req, res) => {
       ? "student"
       : "consumer";
 
+    let newTags;
+    let emailSubject;
+    let emailHtml;
+
     if (action === "approve") {
       // Remove pending-approval, add pro-pricing
       newTags = currentTags
@@ -1559,11 +1503,8 @@ app.post("/api/admin/update-customer-status", async (req, res) => {
 
       console.log(`✅ Approving customer: ${customer.email}`);
 
-      // Set email subject for approval
       emailSubject =
         "🎉 Welcome to Depileve USA - Your Wholesale Account is Approved!";
-      console.log(`✅ Email subject SET for approval: "${emailSubject}"`);
-      // Use your beautiful approval email template
       emailHtml = emailTemplates.getApprovalEmail(
         customer.first_name,
         accountType,
@@ -1577,22 +1518,12 @@ app.post("/api/admin/update-customer-status", async (req, res) => {
 
       console.log(`❌ Rejecting customer: ${customer.email}`);
 
-      // Set email subject for rejection
       emailSubject = "Update on Your Depileve USA Application";
-      console.log(`✅ Email subject SET for rejection: "${emailSubject}"`);
-
-      // Use your beautiful rejection email template
       emailHtml = emailTemplates.getRejectionEmail(
         customer.first_name,
         reason,
         "depileveusa@gmail.com"
       );
-    } else {
-      // Invalid action - shouldn't happen but be safe
-      console.error(`❌ Invalid action: ${action}`);
-      return res
-        .status(400)
-        .json({ error: "Invalid action. Must be 'approve' or 'reject'" });
     }
 
     // Update customer tags in Shopify
@@ -1612,26 +1543,14 @@ app.post("/api/admin/update-customer-status", async (req, res) => {
       }
     );
 
-    // Safety check: ensure emailSubject is set
-    if (!emailSubject || !emailHtml) {
-      console.error(
-        `❌ Email subject or HTML not set! Subject: ${emailSubject}, HTML: ${
-          emailHtml ? "exists" : "missing"
-        }`
-      );
-      return res.status(500).json({ error: "Failed to prepare email" });
-    }
-
-    console.log(`📧 Preparing to send email with subject: "${emailSubject}"`);
-
-    // Send email using your template
+    // Send email
     await sendEmail({
       to: customer.email,
       subject: emailSubject,
       html: emailHtml,
     });
 
-    // OPTIMIZATION: Clear all cached pages
+    // Clear cache
     if (REDIS_ENABLED && redisClient) {
       try {
         const keys = await redisClient.keys("admin:pending-approvals:*");
@@ -1653,6 +1572,430 @@ app.post("/api/admin/update-customer-status", async (req, res) => {
     console.error("❌ Error updating customer:", error.message);
     res.status(500).json({
       error: "Failed to update customer",
+      details: error.message,
+    });
+  }
+});
+
+// ========== 🆕 BATCH APPROVE ENDPOINT ==========
+app.post("/api/admin/batch-approve", async (req, res) => {
+  try {
+    const { customerIds } = req.body;
+
+    if (
+      !customerIds ||
+      !Array.isArray(customerIds) ||
+      customerIds.length === 0
+    ) {
+      return res.status(400).json({ error: "Customer IDs array required" });
+    }
+
+    console.log(`✅ Batch approving ${customerIds.length} customers`);
+
+    const results = {
+      approved: 0,
+      emailsSent: 0,
+      errors: [],
+    };
+
+    // Process each customer
+    for (const customerId of customerIds) {
+      try {
+        // Get customer
+        const getCustomer = await axios.get(
+          `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
+          {
+            headers: {
+              "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        const customer = getCustomer.data.customer;
+        const currentTags = customer.tags
+          .split(", ")
+          .filter((tag) => tag !== "");
+
+        // Determine account type
+        const accountType = currentTags.includes("esthetician")
+          ? "esthetician"
+          : currentTags.includes("salon")
+          ? "salon"
+          : currentTags.includes("student")
+          ? "student"
+          : "consumer";
+
+        // Remove pending-approval, add pro-pricing
+        const newTags = currentTags
+          .filter((tag) => tag !== "pending-approval")
+          .concat(["pro-pricing"]);
+
+        // Update tags
+        await axios.put(
+          `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
+          {
+            customer: {
+              id: customerId,
+              tags: newTags.join(", "),
+            },
+          },
+          {
+            headers: {
+              "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        // Send approval email
+        const emailSubject =
+          "🎉 Welcome to Depileve USA - Your Wholesale Account is Approved!";
+        const emailHtml = emailTemplates.getApprovalEmail(
+          customer.first_name,
+          accountType,
+          SHOPIFY_SHOP
+        );
+
+        const emailSent = await sendEmail({
+          to: customer.email,
+          subject: emailSubject,
+          html: emailHtml,
+        });
+
+        results.approved++;
+        if (emailSent) results.emailsSent++;
+
+        console.log(`  ✅ Approved: ${customer.email}`);
+      } catch (error) {
+        console.error(`  ❌ Failed to approve ${customerId}:`, error.message);
+        results.errors.push({ customerId, error: error.message });
+      }
+    }
+
+    // Clear cache
+    if (REDIS_ENABLED && redisClient) {
+      try {
+        const keys = await redisClient.keys("admin:pending-approvals:*");
+        if (keys && keys.length > 0) {
+          await Promise.all(keys.map((key) => redisClient.del(key)));
+          console.log(`🗑️ Cleared ${keys.length} cached pages`);
+        }
+      } catch (cacheError) {
+        console.error("⚠️ Error clearing cache:", cacheError.message);
+      }
+    }
+
+    console.log(
+      `✅ Batch approve complete: ${results.approved}/${customerIds.length} successful`
+    );
+
+    res.json({
+      success: true,
+      approved: results.approved,
+      emailsSent: results.emailsSent,
+      total: customerIds.length,
+      errors: results.errors,
+    });
+  } catch (error) {
+    console.error("❌ Batch approve error:", error.message);
+    res.status(500).json({
+      error: "Failed to batch approve customers",
+      details: error.message,
+    });
+  }
+});
+
+// ========== 🆕 BATCH REJECT ENDPOINT ==========
+app.post("/api/admin/batch-reject", async (req, res) => {
+  try {
+    const { customerIds, reason } = req.body;
+
+    if (
+      !customerIds ||
+      !Array.isArray(customerIds) ||
+      customerIds.length === 0
+    ) {
+      return res.status(400).json({ error: "Customer IDs array required" });
+    }
+
+    console.log(`❌ Batch rejecting ${customerIds.length} customers`);
+
+    const results = {
+      rejected: 0,
+      emailsSent: 0,
+      errors: [],
+    };
+
+    // Process each customer
+    for (const customerId of customerIds) {
+      try {
+        // Get customer
+        const getCustomer = await axios.get(
+          `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
+          {
+            headers: {
+              "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        const customer = getCustomer.data.customer;
+        const currentTags = customer.tags
+          .split(", ")
+          .filter((tag) => tag !== "");
+
+        // Remove pending-approval, add rejected
+        const newTags = currentTags
+          .filter((tag) => tag !== "pending-approval")
+          .concat(["rejected"]);
+
+        // Update tags
+        await axios.put(
+          `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
+          {
+            customer: {
+              id: customerId,
+              tags: newTags.join(", "),
+            },
+          },
+          {
+            headers: {
+              "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        // Send rejection email
+        const emailSubject = "Update on Your Depileve USA Application";
+        const emailHtml = emailTemplates.getRejectionEmail(
+          customer.first_name,
+          reason,
+          "depileveusa@gmail.com"
+        );
+
+        const emailSent = await sendEmail({
+          to: customer.email,
+          subject: emailSubject,
+          html: emailHtml,
+        });
+
+        results.rejected++;
+        if (emailSent) results.emailsSent++;
+
+        console.log(`  ❌ Rejected: ${customer.email}`);
+      } catch (error) {
+        console.error(`  ❌ Failed to reject ${customerId}:`, error.message);
+        results.errors.push({ customerId, error: error.message });
+      }
+    }
+
+    // Clear cache
+    if (REDIS_ENABLED && redisClient) {
+      try {
+        const keys = await redisClient.keys("admin:pending-approvals:*");
+        if (keys && keys.length > 0) {
+          await Promise.all(keys.map((key) => redisClient.del(key)));
+          console.log(`🗑️ Cleared ${keys.length} cached pages`);
+        }
+      } catch (cacheError) {
+        console.error("⚠️ Error clearing cache:", cacheError.message);
+      }
+    }
+
+    console.log(
+      `✅ Batch reject complete: ${results.rejected}/${customerIds.length} successful`
+    );
+
+    res.json({
+      success: true,
+      rejected: results.rejected,
+      emailsSent: results.emailsSent,
+      total: customerIds.length,
+      errors: results.errors,
+    });
+  } catch (error) {
+    console.error("❌ Batch reject error:", error.message);
+    res.status(500).json({
+      error: "Failed to batch reject customers",
+      details: error.message,
+    });
+  }
+});
+
+// ========== 🆕 BATCH ARCHIVE ENDPOINT ==========
+app.post("/api/admin/batch-archive", async (req, res) => {
+  try {
+    const { customerIds } = req.body;
+
+    if (
+      !customerIds ||
+      !Array.isArray(customerIds) ||
+      customerIds.length === 0
+    ) {
+      return res.status(400).json({ error: "Customer IDs array required" });
+    }
+
+    console.log(`📦 Batch archiving ${customerIds.length} customers`);
+
+    const results = {
+      archived: 0,
+      errors: [],
+    };
+
+    // Process each customer
+    for (const customerId of customerIds) {
+      try {
+        // Get customer
+        const getCustomer = await axios.get(
+          `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
+          {
+            headers: {
+              "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        const customer = getCustomer.data.customer;
+        const currentTags = customer.tags
+          .split(", ")
+          .filter((tag) => tag !== "");
+
+        // Add archived tag if not already present
+        if (!currentTags.includes("archived")) {
+          const newTags = currentTags.concat(["archived"]);
+
+          // Update tags
+          await axios.put(
+            `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
+            {
+              customer: {
+                id: customerId,
+                tags: newTags.join(", "),
+              },
+            },
+            {
+              headers: {
+                "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+                "Content-Type": "application/json",
+              },
+            }
+          );
+
+          results.archived++;
+          console.log(`  📦 Archived: ${customer.email}`);
+        } else {
+          console.log(`  ⏭️ Already archived: ${customer.email}`);
+          results.archived++; // Count as success even if already archived
+        }
+      } catch (error) {
+        console.error(`  ❌ Failed to archive ${customerId}:`, error.message);
+        results.errors.push({ customerId, error: error.message });
+      }
+    }
+
+    // Clear cache
+    if (REDIS_ENABLED && redisClient) {
+      try {
+        const keys = await redisClient.keys("admin:pending-approvals:*");
+        if (keys && keys.length > 0) {
+          await Promise.all(keys.map((key) => redisClient.del(key)));
+          console.log(`🗑️ Cleared ${keys.length} cached pages`);
+        }
+      } catch (cacheError) {
+        console.error("⚠️ Error clearing cache:", cacheError.message);
+      }
+    }
+
+    console.log(
+      `✅ Batch archive complete: ${results.archived}/${customerIds.length} successful`
+    );
+
+    res.json({
+      success: true,
+      archived: results.archived,
+      total: customerIds.length,
+      errors: results.errors,
+    });
+  } catch (error) {
+    console.error("❌ Batch archive error:", error.message);
+    res.status(500).json({
+      error: "Failed to batch archive customers",
+      details: error.message,
+    });
+  }
+});
+
+// ========== 🆕 SINGLE ARCHIVE ENDPOINT ==========
+app.post("/api/admin/archive-customer/:id", async (req, res) => {
+  try {
+    const customerId = req.params.id;
+
+    console.log(`📦 Archiving customer: ${customerId}`);
+
+    // Get customer
+    const getCustomer = await axios.get(
+      `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
+      {
+        headers: {
+          "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    const customer = getCustomer.data.customer;
+    const currentTags = customer.tags.split(", ").filter((tag) => tag !== "");
+
+    // Add archived tag
+    if (!currentTags.includes("archived")) {
+      const newTags = currentTags.concat(["archived"]);
+
+      // Update tags
+      await axios.put(
+        `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
+        {
+          customer: {
+            id: customerId,
+            tags: newTags.join(", "),
+          },
+        },
+        {
+          headers: {
+            "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+    }
+
+    // Clear cache
+    if (REDIS_ENABLED && redisClient) {
+      try {
+        const keys = await redisClient.keys("admin:pending-approvals:*");
+        if (keys && keys.length > 0) {
+          await Promise.all(keys.map((key) => redisClient.del(key)));
+          console.log(`🗑️ Cleared ${keys.length} cached pages`);
+        }
+      } catch (cacheError) {
+        console.error("⚠️ Error clearing cache:", cacheError.message);
+      }
+    }
+
+    console.log(`✅ Customer archived: ${customer.email}`);
+
+    res.json({
+      success: true,
+      message: "Customer archived successfully",
+      customer: { id: customerId, email: customer.email },
+    });
+  } catch (error) {
+    console.error("❌ Archive error:", error.message);
+    res.status(500).json({
+      error: "Failed to archive customer",
       details: error.message,
     });
   }
