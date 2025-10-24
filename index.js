@@ -1205,8 +1205,9 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
     const page = parseInt(req.query.page) || 1;
     const limit = parseInt(req.query.limit) || 10;
     const filter = req.query.filter || "pending";
+    const search = req.query.search || "";
 
-    const cacheKey = `admin:pending-approvals:${page}:${limit}:${filter}`;
+    const cacheKey = `admin:pending-approvals:${page}:${limit}:${filter}:${search}`;
 
     if (REDIS_ENABLED && redisClient) {
       try {
@@ -1269,7 +1270,7 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
         hasMore = false;
       }
 
-      if (allCustomers.length >= 250) hasMore = false;
+      // ✅ FIX #1: REMOVED LINE - if (allCustomers.length >= 250) hasMore = false;
     }
 
     // ========== ENHANCED FILTERING LOGIC ==========
@@ -1285,6 +1286,24 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
       filteredCustomers = filteredCustomers.filter((c) =>
         c.tags.split(", ").includes(tagFilter)
       );
+    }
+
+    // Apply search filter if provided
+    if (search.trim()) {
+      const searchLower = search.toLowerCase();
+      filteredCustomers = filteredCustomers.filter((c) => {
+        const firstName = (c.first_name || "").toLowerCase();
+        const lastName = (c.last_name || "").toLowerCase();
+        const email = (c.email || "").toLowerCase();
+        const phone = (c.phone || "").toLowerCase();
+        const fullName = `${firstName} ${lastName}`;
+
+        return (
+          fullName.includes(searchLower) ||
+          email.includes(searchLower) ||
+          phone.includes(searchLower)
+        );
+      });
     }
 
     // Sort by creation date (newest first)
@@ -2004,36 +2023,72 @@ app.post("/api/admin/archive-customer/:id", async (req, res) => {
 // ========== GET ADMIN STATS ==========
 app.get("/api/admin/stats", async (req, res) => {
   try {
-    const response = await axios.get(
-      `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers.json?limit=250`,
-      {
+    console.log("📊 Fetching ALL customers for stats...");
+
+    // ✅ FIX #2: Fetch ALL customers, not just 250
+    let allCustomers = [];
+    let hasMore = true;
+    let since_id = null;
+    let pageCount = 0;
+
+    while (hasMore) {
+      let url = `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers.json?limit=250`;
+      if (since_id) url += `&since_id=${since_id}`;
+
+      const response = await axios.get(url, {
         headers: {
           "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
           "Content-Type": "application/json",
         },
+      });
+
+      const customers = response.data.customers;
+      allCustomers = allCustomers.concat(customers);
+      pageCount++;
+
+      console.log(
+        `   Fetched page ${pageCount}: ${customers.length} customers (total so far: ${allCustomers.length})`
+      );
+
+      if (customers.length === 250) {
+        since_id = customers[customers.length - 1].id;
+      } else {
+        hasMore = false;
       }
-    );
+    }
 
-    const customers = response.data.customers;
+    console.log(`✅ Total customers fetched: ${allCustomers.length}`);
 
+    // ✅ FIX #3: Use .split(", ").includes() for accurate tag matching
     const stats = {
-      total: customers.length,
-      pending: customers.filter((c) => c.tags.includes("pending-approval"))
-        .length,
-      approved: customers.filter((c) => c.tags.includes("pro-pricing")).length,
-      rejected: customers.filter((c) => c.tags.includes("rejected")).length,
-      consumers: customers.filter((c) => c.tags.includes("consumer")).length,
-      estheticians: customers.filter(
-        (c) => c.tags.includes("esthetician") && c.tags.includes("pro-pricing")
+      total: allCustomers.length,
+      pending: allCustomers.filter((c) =>
+        c.tags.split(", ").includes("pending-approval")
       ).length,
-      salons: customers.filter(
-        (c) => c.tags.includes("salon") && c.tags.includes("pro-pricing")
+      approved: allCustomers.filter((c) =>
+        c.tags.split(", ").includes("pro-pricing")
       ).length,
-      students: customers.filter(
-        (c) => c.tags.includes("student") && c.tags.includes("pro-pricing")
+      rejected: allCustomers.filter((c) =>
+        c.tags.split(", ").includes("rejected")
       ).length,
+      consumers: allCustomers.filter((c) =>
+        c.tags.split(", ").includes("consumer")
+      ).length,
+      estheticians: allCustomers.filter((c) => {
+        const tags = c.tags.split(", ");
+        return tags.includes("esthetician") && tags.includes("pro-pricing");
+      }).length,
+      salons: allCustomers.filter((c) => {
+        const tags = c.tags.split(", ");
+        return tags.includes("salon") && tags.includes("pro-pricing");
+      }).length,
+      students: allCustomers.filter((c) => {
+        const tags = c.tags.split(", ");
+        return tags.includes("student") && tags.includes("pro-pricing");
+      }).length,
     };
 
+    console.log("📊 Stats calculated:", stats);
     res.json({ success: true, stats });
   } catch (error) {
     console.error("❌ Error fetching stats:", error.message);
