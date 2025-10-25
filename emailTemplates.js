@@ -394,7 +394,7 @@ function getOwnerNotificationEmail(customer, fileUrls, shopName) {
             ${filesHtml}
             
             <div class="button-wrapper">
-              <a href="https://${shopName}.myshopify.com/admin/customers/${
+              <a href="https://${shopName}/admin/customers/${
     customer.customerId
   }" class="button">
                 Review in Shopify Admin
@@ -469,7 +469,7 @@ function getApprovalEmail(firstName, accountType, shopName) {
             ${benefits}
             
             <div class="button-wrapper">
-              <a href="https://${shopName}.myshopify.com/account/login" class="button">
+              <a href="https://${shopName}/account/login" class="button">
                 Log In to Your Account
               </a>
             </div>
