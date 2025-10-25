@@ -1432,7 +1432,7 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
             (m) => m.key === "license_file"
           )?.value;
           const studentProofUrl = metafields.find(
-            (m) => m.key === "student_proof"
+            (m) => m.key === "student_proof_file"
           )?.value;
           const taxCertUrl = metafields.find(
             (m) => m.key === "tax_certificate"
