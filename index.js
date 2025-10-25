@@ -1592,12 +1592,10 @@ app.post("/api/admin/update-customer-status", async (req, res) => {
         "depileveusa@gmail.com"
       );
     } else if (action === "archive") {
-      // Add archived tag (keep other tags)
-      if (!currentTags.includes("archived")) {
-        newTags = currentTags.concat(["archived"]);
-      } else {
-        newTags = currentTags; // Already archived
-      }
+      // Remove pending-approval, add archived
+      newTags = currentTags
+        .filter((tag) => tag !== "pending-approval")
+        .concat(["archived"]);
 
       console.log(`📦 Archiving customer: ${customer.email}`);
 
