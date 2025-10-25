@@ -877,6 +877,7 @@ app.post(
           password: password,
           password_confirmation: password,
           verified_email: true,
+          state: "enabled",
           send_email_welcome: false,
           send_email_invite: false,
           tags: tags.join(", "),
