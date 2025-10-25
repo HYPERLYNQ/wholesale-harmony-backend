@@ -877,7 +877,6 @@ app.post(
           password: password,
           password_confirmation: password,
           verified_email: true,
-          state: "enabled",
           send_email_welcome: false,
           send_email_invite: false,
           tags: tags.join(", "),
@@ -907,6 +906,39 @@ app.post(
       );
 
       const customerId = shopifyResponse.data.customer.id;
+
+      // ========== ACTIVATE CUSTOMER ACCOUNT ==========
+      // When creating customers via REST API with a password, they're created in "disabled" state
+      // To activate them immediately, we send an UPDATE request with the same password
+      try {
+        console.log(`🔓 Activating customer account: ${customerId}`);
+
+        await axios.put(
+          `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
+          {
+            customer: {
+              id: customerId,
+              password: password,
+              password_confirmation: password,
+              send_email_welcome: false,
+            },
+          },
+          {
+            headers: {
+              "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        console.log(`✅ Customer account activated: ${customerId}`);
+      } catch (activationError) {
+        console.error(
+          "⚠️ Account activation failed:",
+          activationError.response?.data || activationError.message
+        );
+        // Don't fail registration if activation fails - customer can still login after approval
+      }
 
       // Send emails AFTER customer is created
       try {
