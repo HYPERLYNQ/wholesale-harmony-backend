@@ -201,6 +201,19 @@ async function invalidateCustomerCache(email, phone) {
   }
 }
 
+async function clearAdminCache() {
+  if (!REDIS_ENABLED) return;
+  try {
+    const keys = await redisClient.keys("admin:pending-approvals:*");
+    if (keys?.length) {
+      await Promise.all(keys.map((key) => redisClient.del(key)));
+      console.log(`🗑️ Cleared ${keys.length} cached pages`);
+    }
+  } catch (error) {
+    console.error("⚠️ Cache clear error:", error.message);
+  }
+}
+
 // Helper function to get MIME type
 function getMimeType(filename) {
   const ext = path.extname(filename).toLowerCase();
@@ -1571,6 +1584,14 @@ app.post("/api/admin/update-customer-status", async (req, res) => {
       // Actually delete the customer from Shopify
       console.log(`🗑️ Deleting customer: ${customer.email}`);
 
+      // ✅ FIX: Invalidate phone/email cache BEFORE deleting
+      if (customer.email && customer.phone) {
+        await invalidateCustomerCache(customer.email, customer.phone);
+        console.log(
+          `🗑️ Cache invalidated for: ${customer.email}, ${customer.phone}`
+        );
+      }
+
       await axios.delete(
         `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
         {
@@ -1581,28 +1602,17 @@ app.post("/api/admin/update-customer-status", async (req, res) => {
         }
       );
 
-      // Clear cache
-      if (REDIS_ENABLED && redisClient) {
-        try {
-          const keys = await redisClient.keys("admin:pending-approvals:*");
-          if (keys && keys.length > 0) {
-            await Promise.all(keys.map((key) => redisClient.del(key)));
-            console.log(`🗑️ Cleared ${keys.length} cached pages`);
-          }
-        } catch (cacheError) {
-          console.error("⚠️ Error clearing cache:", cacheError.message);
-        }
-      }
+      // Clear admin dashboard cache
+      await clearAdminCache();
+
+      console.log(
+        `✅ Customer fully deleted and cache cleared: ${customer.email}`
+      );
 
       return res.json({
         success: true,
         message: "Customer deleted",
         customerId: customerId,
-      });
-    } else {
-      return res.status(400).json({
-        success: false,
-        error: `Unknown action: ${action}`,
       });
     }
 
@@ -1634,17 +1644,7 @@ app.post("/api/admin/update-customer-status", async (req, res) => {
       }
 
       // Clear cache
-      if (REDIS_ENABLED && redisClient) {
-        try {
-          const keys = await redisClient.keys("admin:pending-approvals:*");
-          if (keys && keys.length > 0) {
-            await Promise.all(keys.map((key) => redisClient.del(key)));
-            console.log(`🗑️ Cleared ${keys.length} cached pages`);
-          }
-        } catch (cacheError) {
-          console.error("⚠️ Error clearing cache:", cacheError.message);
-        }
-      }
+      await clearAdminCache();
 
       res.json({
         success: true,
@@ -1763,17 +1763,7 @@ app.post("/api/admin/batch-approve", async (req, res) => {
     }
 
     // Clear cache
-    if (REDIS_ENABLED && redisClient) {
-      try {
-        const keys = await redisClient.keys("admin:pending-approvals:*");
-        if (keys && keys.length > 0) {
-          await Promise.all(keys.map((key) => redisClient.del(key)));
-          console.log(`🗑️ Cleared ${keys.length} cached pages`);
-        }
-      } catch (cacheError) {
-        console.error("⚠️ Error clearing cache:", cacheError.message);
-      }
-    }
+    await clearAdminCache();
 
     console.log(
       `✅ Batch approve complete: ${results.approved}/${customerIds.length} successful`
@@ -1882,17 +1872,7 @@ app.post("/api/admin/batch-reject", async (req, res) => {
     }
 
     // Clear cache
-    if (REDIS_ENABLED && redisClient) {
-      try {
-        const keys = await redisClient.keys("admin:pending-approvals:*");
-        if (keys && keys.length > 0) {
-          await Promise.all(keys.map((key) => redisClient.del(key)));
-          console.log(`🗑️ Cleared ${keys.length} cached pages`);
-        }
-      } catch (cacheError) {
-        console.error("⚠️ Error clearing cache:", cacheError.message);
-      }
-    }
+    await clearAdminCache();
 
     console.log(
       `✅ Batch reject complete: ${results.rejected}/${customerIds.length} successful`
@@ -1987,17 +1967,7 @@ app.post("/api/admin/batch-archive", async (req, res) => {
     }
 
     // Clear cache
-    if (REDIS_ENABLED && redisClient) {
-      try {
-        const keys = await redisClient.keys("admin:pending-approvals:*");
-        if (keys && keys.length > 0) {
-          await Promise.all(keys.map((key) => redisClient.del(key)));
-          console.log(`🗑️ Cleared ${keys.length} cached pages`);
-        }
-      } catch (cacheError) {
-        console.error("⚠️ Error clearing cache:", cacheError.message);
-      }
-    }
+    await clearAdminCache();
 
     console.log(
       `✅ Batch archive complete: ${results.archived}/${customerIds.length} successful`
@@ -2062,17 +2032,7 @@ app.post("/api/admin/archive-customer/:id", async (req, res) => {
     }
 
     // Clear cache
-    if (REDIS_ENABLED && redisClient) {
-      try {
-        const keys = await redisClient.keys("admin:pending-approvals:*");
-        if (keys && keys.length > 0) {
-          await Promise.all(keys.map((key) => redisClient.del(key)));
-          console.log(`🗑️ Cleared ${keys.length} cached pages`);
-        }
-      } catch (cacheError) {
-        console.error("⚠️ Error clearing cache:", cacheError.message);
-      }
-    }
+    await clearAdminCache();
 
     console.log(`✅ Customer archived: ${customer.email}`);
 
@@ -2087,6 +2047,54 @@ app.post("/api/admin/archive-customer/:id", async (req, res) => {
       error: "Failed to archive customer",
       details: error.message,
     });
+  }
+});
+
+// ========== BATCH DELETE ENDPOINT ==========
+app.post("/api/admin/batch-delete", async (req, res) => {
+  try {
+    const { customerIds } = req.body;
+    if (!customerIds?.length)
+      return res.status(400).json({ error: "Customer IDs required" });
+
+    const results = { deleted: 0, errors: [] };
+
+    for (const id of customerIds) {
+      try {
+        const { data } = await axios.get(
+          `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${id}.json`,
+          { headers: { "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN } }
+        );
+
+        if (data.customer.email && data.customer.phone) {
+          await invalidateCustomerCache(
+            data.customer.email,
+            data.customer.phone
+          );
+        }
+
+        await axios.delete(
+          `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${id}.json`,
+          { headers: { "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN } }
+        );
+
+        results.deleted++;
+      } catch (error) {
+        results.errors.push({ customerId: id, error: error.message });
+      }
+    }
+
+    await clearAdminCache();
+    res.json({
+      success: true,
+      deleted: results.deleted,
+      total: customerIds.length,
+      errors: results.errors,
+    });
+  } catch (error) {
+    res
+      .status(500)
+      .json({ error: "Batch delete failed", details: error.message });
   }
 });
 
