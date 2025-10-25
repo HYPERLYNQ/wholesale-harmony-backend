@@ -927,7 +927,7 @@ app.post(
 
           // Notify store owner of new professional registration
           await sendEmail({
-            to: process.env.STORE_OWNER_EMAIL || "depileveusa@gmail.com",
+            to: process.env.STORE_OWNER_EMAIL || "noreply@wholesaleharmony.app",
             subject: `🔔 New ${
               accountType.charAt(0).toUpperCase() + accountType.slice(1)
             } Registration - Action Required`,
