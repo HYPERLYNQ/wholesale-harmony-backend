@@ -2097,6 +2097,38 @@ app.post("/api/admin/batch-delete", async (req, res) => {
       .json({ error: "Batch delete failed", details: error.message });
   }
 });
+// ========== ClEAR CACHE ==========
+app.post("/api/admin/clear-cache", async (req, res) => {
+  if (!REDIS_ENABLED)
+    return res.json({ success: false, message: "Redis not enabled" });
+
+  try {
+    const { type } = req.body; // "all", "customers", "admin"
+
+    let keys = [];
+
+    if (type === "customers") {
+      const [phoneKeys, emailKeys, dupeKeys] = await Promise.all([
+        redisClient.keys("phone:*"),
+        redisClient.keys("email:*"),
+        redisClient.keys("duplicate:*"),
+      ]);
+      keys = [...phoneKeys, ...emailKeys, ...dupeKeys];
+    } else if (type === "admin") {
+      keys = await redisClient.keys("admin:pending-approvals:*");
+    } else {
+      keys = await redisClient.keys("*");
+    }
+    if (keys?.length) {
+      await Promise.all(keys.map((k) => redisClient.del(k)));
+      return res.json({ success: true, cleared: keys.length });
+    }
+
+    res.json({ success: true, cleared: 0 });
+  } catch (error) {
+    res.status(500).json({ error: error.message });
+  }
+});
 
 // ========== GET ADMIN STATS ==========
 app.get("/api/admin/stats", async (req, res) => {
