@@ -1563,9 +1563,9 @@ app.post("/api/admin/update-customer-status", async (req, res) => {
     let emailHtml;
 
     if (action === "approve") {
-      // Remove pending-approval, add pro-pricing
+      // Remove pending-approval and archived, add pro-pricing
       newTags = currentTags
-        .filter((tag) => tag !== "pending-approval")
+        .filter((tag) => tag !== "pending-approval" && tag !== "archived")
         .concat(["pro-pricing"]);
 
       console.log(`✅ Approving customer: ${customer.email}`);
@@ -1578,9 +1578,9 @@ app.post("/api/admin/update-customer-status", async (req, res) => {
         SHOPIFY_SHOP
       );
     } else if (action === "reject") {
-      // Remove pending-approval, add rejected
+      // Remove pending-approval and archived, add rejected
       newTags = currentTags
-        .filter((tag) => tag !== "pending-approval")
+        .filter((tag) => tag !== "pending-approval" && tag !== "archived")
         .concat(["rejected"]);
 
       console.log(`❌ Rejecting customer: ${customer.email}`);
