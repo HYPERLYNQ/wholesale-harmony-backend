@@ -166,7 +166,18 @@ async function getCachedResult(key) {
     const cached = await redisClient.get(key);
     if (cached) {
       console.log(`💾 Cache HIT: ${key}`);
-      return JSON.parse(cached);
+      try {
+        return JSON.parse(cached);
+      } catch (parseError) {
+        // ✅ FIX: If cached data is malformed, clear it and return null
+        console.error(
+          `❌ Invalid JSON in cache for key ${key}:`,
+          parseError.message
+        );
+        console.log(`🗑️ Clearing malformed cache key: ${key}`);
+        await redisClient.del(key);
+        return null;
+      }
     }
     console.log(`🔍 Cache MISS: ${key}`);
     return null;
@@ -503,7 +514,13 @@ async function checkDuplicates(email, phoneDigits) {
   if (cached !== null) {
     const duration = Date.now() - startTime;
     console.log(`⚡ Returned from cache in ${duration}ms`);
-    return cached;
+    // ✅ FIX: Reconstruct expected format from cached simple data
+    // Cached data: { emailExists: boolean, phoneExists: boolean, phoneNumber: string }
+    // Expected return: { emailExists: boolean, phoneCustomer: object|null }
+    return {
+      emailExists: cached.emailExists,
+      phoneCustomer: cached.phoneExists ? { phone: cached.phoneNumber } : null,
+    };
   }
 
   // Run email and phone checks in parallel
@@ -514,8 +531,14 @@ async function checkDuplicates(email, phoneDigits) {
 
   const result = { emailExists, phoneCustomer };
 
-  // Cache the result for 5 minutes
-  await setCachedResult(cacheKey, result, 300);
+  // ✅ FIX: Cache only simple data to prevent "[object Object]" serialization errors
+  // Store essential info: booleans + phone number for better logging
+  const cacheableResult = {
+    emailExists,
+    phoneExists: phoneCustomer !== null,
+    phoneNumber: phoneCustomer?.phone || null,
+  };
+  await setCachedResult(cacheKey, cacheableResult, 300);
 
   const duration = Date.now() - startTime;
   console.log(`⏱️ Duplicate check completed in ${duration}ms`);
@@ -906,39 +929,6 @@ app.post(
       );
 
       const customerId = shopifyResponse.data.customer.id;
-
-      // ========== ACTIVATE CUSTOMER ACCOUNT ==========
-      // When creating customers via REST API with a password, they're created in "disabled" state
-      // To activate them immediately, we send an UPDATE request with the same password
-      try {
-        console.log(`🔓 Activating customer account: ${customerId}`);
-
-        await axios.put(
-          `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
-          {
-            customer: {
-              id: customerId,
-              password: password,
-              password_confirmation: password,
-              send_email_welcome: false,
-            },
-          },
-          {
-            headers: {
-              "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
-              "Content-Type": "application/json",
-            },
-          }
-        );
-
-        console.log(`✅ Customer account activated: ${customerId}`);
-      } catch (activationError) {
-        console.error(
-          "⚠️ Account activation failed:",
-          activationError.response?.data || activationError.message
-        );
-        // Don't fail registration if activation fails - customer can still login after approval
-      }
 
       // Send emails AFTER customer is created
       try {
