@@ -284,15 +284,15 @@ function getPendingApprovalEmail(firstName, accountType) {
               <p><span class="status-icon">⏰</span><span class="status-label">Review Time:</span> 1-2 business days</p>
             </div>
             
-            <p>We're currently reviewing your registration. You'll receive another email once your account has been approved.</p>
+            <p>We're currently reviewing your registration for professional pricing access.</p>
             
             ${
               accountType !== "consumer"
-                ? '<div class="please-note"><strong>Please note:</strong> Do not attempt to log in until you receive your approval email.</div>'
+                ? '<div class="please-note"><strong>Good News:</strong> You can log in to your account anytime using the email and password you created. However, professional pricing will only be visible after your account is approved (typically within 1-2 business days).</div>'
                 : ""
             }
             
-            <p>If you have any questions, feel free to reply to this email.</p>
+            <p>You'll receive a confirmation email as soon as your wholesale account is approved and professional pricing is activated.</p>
             
             <div class="team-signature">
               <p>Best regards,</p>
@@ -460,11 +460,11 @@ function getApprovalEmail(firstName, accountType, shopName) {
             
             <div class="status-box">
               <p style="font-size: 18px; font-weight: 600; color: #a8d5d3; margin: 0;">
-                ✓ Your Account is Now Active!
+                ✓ Your Professional Pricing is Now Active!
               </p>
             </div>
             
-            <p>You can now log in and start shopping with your special <strong>${accountType}</strong> benefits.</p>
+            <p>Great news! Your wholesale account has been approved. Log in now to shop with your exclusive <strong>${accountType}</strong> pricing on all products.</p>
             
             ${benefits}
             

@@ -876,6 +876,7 @@ app.post(
           phone: phone,
           password: password,
           password_confirmation: password,
+          verified_email: true,
           send_email_welcome: false,
           send_email_invite: false,
           tags: tags.join(", "),
