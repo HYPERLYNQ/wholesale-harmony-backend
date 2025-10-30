@@ -10,6 +10,21 @@ const path = require("path");
 const FormData = require("form-data");
 const emailTemplates = require("./emailTemplates");
 
+// MongoDB Connection
+const mongoose = require("mongoose");
+
+mongoose
+  .connect(process.env.MONGODB_URI, {
+    useNewUrlParser: true,
+    useUnifiedTopology: true,
+  })
+  .then(() => {
+    console.log("✅ MongoDB connected");
+  })
+  .catch((err) => {
+    console.error("❌ MongoDB connection error:", err);
+  });
+
 // File compression libraries
 const sharp = require("sharp");
 const { PDFDocument } = require("pdf-lib");
