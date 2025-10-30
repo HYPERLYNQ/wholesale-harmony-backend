@@ -4,7 +4,6 @@ const pricingRuleSchema = new mongoose.Schema({
   shopDomain: {
     type: String,
     required: true,
-    index: true, // Fast queries by shop
   },
 
   defaultDiscount: {
