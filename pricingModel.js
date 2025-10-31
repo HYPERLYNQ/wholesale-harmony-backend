@@ -46,6 +46,21 @@ const pricingRuleSchema = new mongoose.Schema({
           min: 0,
         },
       },
+      tiers: [
+        {
+          qty: {
+            type: Number,
+            required: true,
+            min: 1,
+          },
+          discount: {
+            type: Number,
+            required: true,
+            min: 0,
+            max: 100,
+          },
+        },
+      ],
       updatedAt: {
         type: Date,
         default: Date.now,
