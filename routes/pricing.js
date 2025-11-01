@@ -399,9 +399,21 @@ router.get("/cart-discount", async (req, res) => {
     }
 
     // Fetch customer from Shopify
+
+    // Fetch customer from Shopify using GraphQL
     try {
-      const customerResponse = await axios.get(
-        `https://${shopDomain}/admin/api/2024-10/customers/${customerId}.json`,
+      const customerQuery = `
+        query {
+          customer(id: "gid://shopify/Customer/${customerId}") {
+            id
+            tags
+          }
+        }
+      `;
+
+      const customerResponse = await axios.post(
+        `https://${shopDomain}/admin/api/2024-10/graphql.json`,
+        { query: customerQuery },
         {
           headers: {
             "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
@@ -410,11 +422,20 @@ router.get("/cart-discount", async (req, res) => {
         }
       );
 
-      const customer = customerResponse.data.customer;
-      const tags = customer.tags.split(", ");
+      const customerData = customerResponse.data.data.customer;
+      if (!customerData) {
+        return res.json({
+          success: true,
+          discount: 0,
+          type: "none",
+          message: "Customer not found",
+        });
+      }
+
+      const customerTags = customerData.tags;
 
       // Check if approved
-      const isApproved = tags.includes("pro-pricing");
+      const isApproved = customerTags.includes("pro-pricing");
       if (!isApproved) {
         return res.json({
           success: true,
@@ -425,9 +446,10 @@ router.get("/cart-discount", async (req, res) => {
       }
 
       // Determine account type
-      if (tags.includes("student")) accountType = "student";
-      else if (tags.includes("esthetician")) accountType = "esthetician";
-      else if (tags.includes("salon")) accountType = "salon";
+      if (customerTags.includes("student")) accountType = "student";
+      else if (customerTags.includes("esthetician"))
+        accountType = "esthetician";
+      else if (customerTags.includes("salon")) accountType = "salon";
     } catch (err) {
       console.error("Error fetching customer:", err.message);
       return res.json({
