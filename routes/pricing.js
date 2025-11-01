@@ -371,4 +371,148 @@ router.get("/product/:productId", async (req, res) => {
   }
 });
 
+// Get cart discount for Shopify Function (NEW)
+router.get("/cart-discount", async (req, res) => {
+  try {
+    const { customerId, productId, quantity = 1 } = req.query;
+    const shopDomain = process.env.SHOPIFY_SHOP_NAME + ".myshopify.com";
+
+    console.log(
+      `🛒 Cart discount check: Product ${productId}, Customer ${
+        customerId || "guest"
+      }, Qty ${quantity}`
+    );
+
+    // Default: no discount
+    let discountPercent = 0;
+    let discountType = "none";
+    let accountType = "consumer";
+
+    // Step 1: Check customer status
+    if (!customerId) {
+      return res.json({
+        success: true,
+        discount: 0,
+        type: "none",
+        message: "Not logged in",
+      });
+    }
+
+    // Fetch customer from Shopify
+    try {
+      const customerResponse = await axios.get(
+        `https://${shopDomain}/admin/api/2024-10/customers/${customerId}.json`,
+        {
+          headers: {
+            "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+            "Content-Type": "application/json",
+          },
+        }
+      );
+
+      const customer = customerResponse.data.customer;
+      const tags = customer.tags.split(", ");
+
+      // Check if approved
+      const isApproved = tags.includes("pro-pricing");
+      if (!isApproved) {
+        return res.json({
+          success: true,
+          discount: 0,
+          type: "none",
+          message: "Customer not approved for wholesale pricing",
+        });
+      }
+
+      // Determine account type
+      if (tags.includes("student")) accountType = "student";
+      else if (tags.includes("esthetician")) accountType = "esthetician";
+      else if (tags.includes("salon")) accountType = "salon";
+    } catch (err) {
+      console.error("Error fetching customer:", err.message);
+      return res.json({
+        success: true,
+        discount: 0,
+        type: "none",
+        message: "Error fetching customer data",
+      });
+    }
+
+    // Step 2: Get pricing rules
+    const pricingRule = await PricingRule.findOne({ shopDomain });
+    if (!pricingRule) {
+      return res.json({
+        success: true,
+        discount: 0,
+        type: "none",
+        message: "No pricing rules configured",
+      });
+    }
+
+    // Step 3: Check for product override
+    const override = pricingRule.productOverrides.find(
+      (p) => p.productId === productId
+    );
+
+    // Step 4: Calculate discount based on quantity and tiers
+    if (override && override.tiers && override.tiers.length > 0) {
+      // Find applicable tier based on quantity
+      const sortedTiers = override.tiers
+        .filter((tier) => parseInt(quantity) >= tier.qty)
+        .sort((a, b) => b.qty - a.qty);
+
+      if (sortedTiers.length > 0) {
+        discountPercent = sortedTiers[0].discount;
+        discountType = "tier";
+      } else {
+        // Below all tiers, use base discount
+        discountPercent =
+          override.type === "percentage"
+            ? override.value
+            : pricingRule.defaultDiscount;
+        discountType = "base";
+      }
+    } else if (override) {
+      // Product override without tiers
+      discountPercent =
+        override.type === "percentage"
+          ? override.value
+          : pricingRule.defaultDiscount;
+      discountType = "override";
+    } else {
+      // Default discount
+      discountPercent = pricingRule.defaultDiscount;
+      discountType = "default";
+    }
+
+    // Step 5: Check MOQ
+    let meetsMinimum = true;
+    if (override && override.moq && override.moq[accountType]) {
+      const moq = override.moq[accountType];
+      if (moq && parseInt(quantity) < moq) {
+        meetsMinimum = false;
+      }
+    }
+
+    res.json({
+      success: true,
+      discount: meetsMinimum ? discountPercent : 0,
+      type: discountType,
+      accountType,
+      quantity: parseInt(quantity),
+      meetsMinimum,
+      message: meetsMinimum
+        ? `${discountPercent}% discount applied`
+        : `Below minimum order quantity`,
+    });
+  } catch (err) {
+    console.error("❌ Error calculating cart discount:", err);
+    res.status(500).json({
+      success: false,
+      discount: 0,
+      error: err.message,
+    });
+  }
+});
+
 module.exports = router;
