@@ -2258,6 +2258,67 @@ app.get("/api/admin/stats", async (req, res) => {
   }
 });
 
+// ========== ACTIVATE WHOLESALE DISCOUNT FUNCTION ==========
+app.post("/api/admin/activate-discount-function", async (req, res) => {
+  try {
+    console.log("🎯 Activating wholesale discount function...");
+
+    const query = `
+      mutation {
+        discountAutomaticAppCreate(
+          automaticAppDiscount: {
+            title: "Wholesale Discount"
+            functionId: "47ff8d8e-d214-6a35-d95f-b26f4b9e8cb6202ffc9d"
+            startsAt: "2025-01-01T00:00:00Z"
+          }
+        ) {
+          userErrors {
+            field
+            message
+          }
+          automaticAppDiscount {
+            discountId
+            title
+            status
+          }
+        }
+      }
+    `;
+
+    const response = await axios.post(
+      `https://${SHOPIFY_SHOP}/admin/api/2025-04/graphql.json`,
+      { query },
+      {
+        headers: {
+          "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    console.log("✅ Function activation response:", response.data);
+
+    if (response.data.data.discountAutomaticAppCreate.userErrors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        errors: response.data.data.discountAutomaticAppCreate.userErrors,
+      });
+    }
+
+    res.json({
+      success: true,
+      discount:
+        response.data.data.discountAutomaticAppCreate.automaticAppDiscount,
+    });
+  } catch (error) {
+    console.error("❌ Function activation failed:", error.message);
+    res.status(500).json({
+      error: "Failed to activate function",
+      details: error.response?.data || error.message,
+    });
+  }
+});
+
 // Start server
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
