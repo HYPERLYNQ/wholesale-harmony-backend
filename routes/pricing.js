@@ -477,6 +477,16 @@ router.get("/cart-discount", async (req, res) => {
     );
 
     // Step 4: Calculate discount based on quantity and tiers
+    // Tiers are ADDITIONAL % off the pro price, not total discount
+
+    // Get base discount first
+    let baseDiscount = 0;
+    if (override && override.type === "percentage") {
+      baseDiscount = override.value;
+    } else {
+      baseDiscount = pricingRule.defaultDiscount;
+    }
+
     if (override && override.tiers && override.tiers.length > 0) {
       // Find applicable tier based on quantity
       const sortedTiers = override.tiers
@@ -484,22 +494,26 @@ router.get("/cart-discount", async (req, res) => {
         .sort((a, b) => b.qty - a.qty);
 
       if (sortedTiers.length > 0) {
-        discountPercent = sortedTiers[0].discount;
+        // Tier discount is ADDITIONAL % off the pro price
+        // Example: Base 27% off regular = $21.17
+        //          Then tier 10% off $21.17 = $19.05
+        //          Total discount from regular: 34.3%
+        const additionalDiscount = sortedTiers[0].discount;
+
+        // Calculate combined discount
+        const combinedMultiplier =
+          (1 - baseDiscount / 100) * (1 - additionalDiscount / 100);
+        discountPercent = (1 - combinedMultiplier) * 100;
+
         discountType = "tier";
       } else {
-        // Below all tiers, use base discount
-        discountPercent =
-          override.type === "percentage"
-            ? override.value
-            : pricingRule.defaultDiscount;
+        // Below all tiers, use base discount only
+        discountPercent = baseDiscount;
         discountType = "base";
       }
     } else if (override) {
       // Product override without tiers
-      discountPercent =
-        override.type === "percentage"
-          ? override.value
-          : pricingRule.defaultDiscount;
+      discountPercent = baseDiscount;
       discountType = "override";
     } else {
       // Default discount
