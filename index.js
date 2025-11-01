@@ -2296,12 +2296,18 @@ app.post("/api/admin/activate-discount-function", async (req, res) => {
       }
     );
 
-    console.log("✅ Function activation response:", response.data);
+    console.log(
+      "✅ Function activation response:",
+      JSON.stringify(response.data, null, 2)
+    );
 
-    if (response.data.data.discountAutomaticAppCreate.userErrors.length > 0) {
+    const userErrors = response.data.data.discountAutomaticAppCreate.userErrors;
+
+    if (userErrors.length > 0) {
+      console.log("❌ User Errors:", JSON.stringify(userErrors, null, 2));
       return res.status(400).json({
         success: false,
-        errors: response.data.data.discountAutomaticAppCreate.userErrors,
+        errors: userErrors,
       });
     }
 
