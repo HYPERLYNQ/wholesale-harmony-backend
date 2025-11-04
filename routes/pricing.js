@@ -1,6 +1,17 @@
 // ========================================
 // PRICING ROUTES - WHOLESALE HARMONY
-// Per-customer-type default discounts
+// Backend API for Product Pricing Management
+// ========================================
+//
+// This router handles:
+// - Fetching products with pricing data
+// - Per-customer-type discounts
+// - Per-customer-type MOQ (Minimum Order Quantity)
+// - Per-customer-type quantity discount tiers
+// - Bulk updates and product resets
+// - Theme integration endpoints
+// - Shopify Function cart discount calculations
+//
 // ========================================
 
 const express = require("express");
@@ -9,11 +20,15 @@ const axios = require("axios");
 const PricingRule = require("../pricingModel");
 const Settings = require("../settingsModel");
 
+// ========================================
+// CONFIGURATION
+// ========================================
 const SHOPIFY_SHOP = `${process.env.SHOPIFY_SHOP_NAME}.myshopify.com`;
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
 // ========================================
-// GET PRODUCTS WITH PRICING
+// GET /api/pricing/products
+// Fetch all products with pricing rules
 // ========================================
 router.get("/products", async (req, res) => {
   try {
@@ -27,7 +42,7 @@ router.get("/products", async (req, res) => {
 
     console.log("📊 Fetching products for pricing...");
 
-    // Get pricing rules
+    // ---------- LOAD PRICING RULES ----------
     let pricingRule = await PricingRule.findOne({ shopDomain: SHOPIFY_SHOP });
     if (!pricingRule) {
       pricingRule = await PricingRule.create({
@@ -37,7 +52,7 @@ router.get("/products", async (req, res) => {
       });
     }
 
-    // ⭐ Fetch customer types from Settings
+    // ---------- LOAD CUSTOMER TYPES FROM SETTINGS ----------
     const settings = await Settings.findOne({ shopDomain: SHOPIFY_SHOP });
     const customerTypes = settings?.customerTypes || [];
 
@@ -48,7 +63,7 @@ router.get("/products", async (req, res) => {
       console.log(`   ${type.icon} ${type.name}: ${type.defaultDiscount}%`);
     });
 
-    // Fetch products from Shopify
+    // ---------- BUILD SHOPIFY GRAPHQL QUERY ----------
     let query = `first: ${limit}`;
     if (search) {
       query += `, query: "title:*${search}*"`;
@@ -87,6 +102,7 @@ router.get("/products", async (req, res) => {
       }
     `;
 
+    // ---------- FETCH PRODUCTS FROM SHOPIFY ----------
     const productsResponse = await axios.post(
       `https://${SHOPIFY_SHOP}/admin/api/2024-10/graphql.json`,
       { query: productsQuery },
@@ -98,6 +114,7 @@ router.get("/products", async (req, res) => {
       }
     );
 
+    // ---------- PROCESS PRODUCTS WITH PRICING ----------
     const products = productsResponse.data.data.products.edges.map((edge) => {
       const product = edge.node;
       const productId = product.id.split("/").pop();
@@ -110,8 +127,7 @@ router.get("/products", async (req, res) => {
         (p) => p.productId === productId
       );
 
-      // ⭐ Calculate appliedDiscounts per customer type
-      // CRITICAL: Check customerDiscounts FIRST, then value fallback
+      // ===== CALCULATE PER-TYPE DISCOUNTS =====
       let appliedDiscounts = {};
 
       if (
@@ -119,9 +135,9 @@ router.get("/products", async (req, res) => {
         override.customerDiscounts &&
         override.customerDiscounts.size > 0
       ) {
-        // ⭐ Per-customer-type discounts - CHECK THIS FIRST!
+        // Mode: Per-customer-type discounts
         customerTypes.forEach((type) => {
-          const typeDiscount = override.customerDiscounts.get(type.id); // ✅ Use .get() for Map
+          const typeDiscount = override.customerDiscounts.get(type.id);
           if (typeDiscount) {
             appliedDiscounts[type.id] = {
               value: typeDiscount.value,
@@ -129,7 +145,6 @@ router.get("/products", async (req, res) => {
               isCustom: true,
             };
           } else {
-            // Use customer type's default
             appliedDiscounts[type.id] = {
               value: type.defaultDiscount || 0,
               type: "percentage",
@@ -138,12 +153,11 @@ router.get("/products", async (req, res) => {
           }
         });
       } else if (override && override.value !== undefined) {
-        // Global discount mode
+        // Mode: Global discount (same for all types)
         customerTypes.forEach((type) => {
           const typeDefault = type.defaultDiscount || 0;
           const overrideValue = override.value;
 
-          // If override matches the customer type's default, treat as default
           const isActuallyCustom =
             (override.type === "percentage" && overrideValue !== typeDefault) ||
             override.type === "fixed";
@@ -155,7 +169,7 @@ router.get("/products", async (req, res) => {
           };
         });
       } else {
-        // No override - use each customer type's default from Settings
+        // Mode: No override - use Settings defaults
         customerTypes.forEach((type) => {
           appliedDiscounts[type.id] = {
             value: type.defaultDiscount || 0,
@@ -165,16 +179,15 @@ router.get("/products", async (req, res) => {
         });
       }
 
-      // Calculate main proPrice (use first customer type's discount)
+      // ===== CALCULATE DISPLAY PRO PRICE (first customer type) =====
       let proPrice;
       if (
         override &&
         override.customerDiscounts &&
         override.customerDiscounts.size > 0
       ) {
-        // Per-type discounts: use first type's discount
         const firstType = customerTypes[0];
-        const firstTypeDiscount = override.customerDiscounts.get(firstType.id); // ✅ Use .get()
+        const firstTypeDiscount = override.customerDiscounts.get(firstType.id);
         if (firstTypeDiscount) {
           proPrice =
             firstTypeDiscount.type === "fixed"
@@ -185,32 +198,33 @@ router.get("/products", async (req, res) => {
             regularPrice * (1 - (firstType.defaultDiscount || 0) / 100);
         }
       } else if (override && override.value !== undefined) {
-        // Global discount
         proPrice =
           override.type === "fixed"
             ? override.value
             : regularPrice * (1 - override.value / 100);
       } else {
-        // No override: use first customer type's default
         const firstTypeDiscount = customerTypes[0]?.defaultDiscount || 0;
         proPrice = regularPrice * (1 - firstTypeDiscount / 100);
       }
 
-      // ⭐ Build MOQ object with default/custom distinction
+      // ===== BUILD PER-TYPE MOQ DATA =====
       const moqData = {};
       customerTypes.forEach((type) => {
         let moqValue = null;
         let isDefault = true;
 
-        // Check product-specific override
+        // Check dynamic MOQ first (new Map structure)
         if (override?.customerMOQ && override.customerMOQ.has(type.id)) {
           moqValue = override.customerMOQ.get(type.id);
           isDefault = false;
-        } else if (override?.moq && override.moq[type.id] !== undefined) {
+        }
+        // Check legacy MOQ structure
+        else if (override?.moq && override.moq[type.id] !== undefined) {
           moqValue = override.moq[type.id];
           isDefault = false;
-        } else {
-          // Use default from Settings
+        }
+        // Fallback to Settings default
+        else {
           moqValue = type.moqDefault || 0;
           isDefault = true;
         }
@@ -223,25 +237,43 @@ router.get("/products", async (req, res) => {
         }
       });
 
-      // Extract SKU from first variant
+      // ===== BUILD PER-TYPE TIERS DATA =====
+      const tiersData = {};
+      let hasPerTypeTiers = false;
+
+      if (override?.customerTiers && override.customerTiers.size > 0) {
+        // Per-type tiers exist
+        hasPerTypeTiers = true;
+        customerTypes.forEach((type) => {
+          const typeTiers = override.customerTiers.get(type.id);
+          if (typeTiers && typeTiers.length > 0) {
+            tiersData[type.id] = typeTiers;
+          }
+        });
+      }
+
+      // ===== EXTRACT SKU =====
       const sku = product.variants?.edges[0]?.node?.sku || null;
 
+      // ===== RETURN PRODUCT DATA =====
       return {
         id: productId,
         title: product.title,
-        sku, // ⭐ Product SKU
+        sku,
         regularPrice,
         proPrice,
-        appliedDiscounts, // ⭐ Per customer type discounts
+        appliedDiscounts, // Per-type discounts
         productType: product.productType || "Uncategorized",
         vendor: product.vendor || "Unknown",
         image: product.featuredImage?.url,
         override: override || null,
-        moq: moqData, // ⭐ Per customer type MOQ with default/custom flag
+        moq: moqData, // Per-type MOQ
+        tiers: tiersData, // Per-type tiers
+        hasPerTypeTiers, // Flag to indicate per-type mode
       };
     });
 
-    // Apply filters
+    // ---------- APPLY FILTERS ----------
     let filtered = products;
     if (productType) {
       filtered = filtered.filter((p) => p.productType === productType);
@@ -254,11 +286,12 @@ router.get("/products", async (req, res) => {
       `✅ Returning ${filtered.length} products with per-type pricing`
     );
 
+    // ---------- SEND RESPONSE ----------
     res.json({
       success: true,
       products: filtered,
       defaultDiscount: pricingRule.defaultDiscount, // Legacy
-      customerTypes, // ⭐ Include customer types array
+      customerTypes, // Dynamic customer types from Settings
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
@@ -272,7 +305,8 @@ router.get("/products", async (req, res) => {
 });
 
 // ========================================
-// UPDATE DEFAULT DISCOUNT (LEGACY)
+// PUT /api/pricing/default
+// Update global default discount (LEGACY)
 // ========================================
 router.put("/default", async (req, res) => {
   try {
@@ -293,12 +327,14 @@ router.put("/default", async (req, res) => {
 });
 
 // ========================================
-// BULK UPDATE PRODUCTS
+// POST /api/pricing/bulk-update
+// Bulk update product pricing rules
 // ========================================
 router.post("/bulk-update", async (req, res) => {
   try {
     const { products } = req.body;
 
+    // ---------- LOAD PRICING RULES ----------
     let pricingRule = await PricingRule.findOne({ shopDomain: SHOPIFY_SHOP });
     if (!pricingRule) {
       pricingRule = new PricingRule({
@@ -307,6 +343,7 @@ router.post("/bulk-update", async (req, res) => {
       });
     }
 
+    // ---------- PROCESS EACH PRODUCT UPDATE ----------
     products.forEach((update) => {
       console.log("🔍 INCOMING UPDATE:", JSON.stringify(update, null, 2));
 
@@ -314,7 +351,9 @@ router.post("/bulk-update", async (req, res) => {
         (p) => p.productId === update.productId
       );
 
-      // Convert typeDiscounts to customerDiscounts if present
+      // ===== CONVERT FRONTEND FORMATS TO SCHEMA FORMATS =====
+
+      // Convert typeDiscounts → customerDiscounts (Map)
       if (update.typeDiscounts) {
         update.customerDiscounts = update.typeDiscounts;
         delete update.typeDiscounts;
@@ -324,13 +363,12 @@ router.post("/bulk-update", async (req, res) => {
           JSON.stringify(update.customerDiscounts, null, 2)
         );
 
-        // Schema requires value/type, so add placeholders for per-type mode
-        // These won't be used since customerDiscounts takes precedence
+        // Schema requires value/type placeholders for per-type mode
         if (update.value === undefined) update.value = 0;
         if (update.type === undefined) update.type = "percentage";
       }
 
-      // Convert moq object to Map for customerMOQ
+      // Convert moq object → customerMOQ (Map)
       if (update.moq && typeof update.moq === "object") {
         const moqMap = new Map();
         Object.entries(update.moq).forEach(([key, value]) => {
@@ -339,6 +377,23 @@ router.post("/bulk-update", async (req, res) => {
           }
         });
         update.customerMOQ = moqMap;
+      }
+
+      // Convert typeTiers object → customerTiers (Map)
+      if (update.typeTiers && typeof update.typeTiers === "object") {
+        const tiersMap = new Map();
+        Object.entries(update.typeTiers).forEach(([typeId, tiers]) => {
+          if (tiers && Array.isArray(tiers) && tiers.length > 0) {
+            tiersMap.set(typeId, tiers);
+          }
+        });
+        update.customerTiers = tiersMap;
+        delete update.typeTiers;
+
+        console.log(
+          "✅ CONVERTED TO customerTiers:",
+          JSON.stringify(Object.fromEntries(tiersMap), null, 2)
+        );
       }
 
       console.log(
@@ -352,19 +407,26 @@ router.post("/bulk-update", async (req, res) => {
             customerMOQ: update.customerMOQ
               ? Object.fromEntries(update.customerMOQ)
               : null,
+            customerTiers: update.customerTiers
+              ? Object.fromEntries(update.customerTiers)
+              : null,
+            tiers: update.tiers, // Legacy global tiers
           },
           null,
           2
         )
       );
 
+      // ===== UPDATE OR CREATE OVERRIDE =====
       if (existingIndex >= 0) {
+        // Update existing override
         pricingRule.productOverrides[existingIndex] = {
           ...pricingRule.productOverrides[existingIndex],
           ...update,
           updatedAt: new Date(),
         };
       } else {
+        // Create new override
         pricingRule.productOverrides.push({
           ...update,
           updatedAt: new Date(),
@@ -372,6 +434,7 @@ router.post("/bulk-update", async (req, res) => {
       }
     });
 
+    // ---------- SAVE TO DATABASE ----------
     pricingRule.updatedAt = new Date();
     await pricingRule.save();
 
@@ -384,7 +447,8 @@ router.post("/bulk-update", async (req, res) => {
 });
 
 // ========================================
-// RESET PRODUCTS TO DEFAULT
+// POST /api/pricing/reset
+// Reset products to Settings defaults
 // ========================================
 router.post("/reset", async (req, res) => {
   try {
@@ -395,6 +459,7 @@ router.post("/reset", async (req, res) => {
       return res.json({ success: true, removed: 0 });
     }
 
+    // Remove overrides for specified products
     pricingRule.productOverrides = pricingRule.productOverrides.filter(
       (p) => !productIds.includes(p.productId)
     );
@@ -411,7 +476,8 @@ router.post("/reset", async (req, res) => {
 });
 
 // ========================================
-// GET SINGLE PRODUCT PRICING (Theme)
+// GET /api/pricing/product/:productId
+// Get pricing for single product (Theme Integration)
 // ========================================
 router.get("/product/:productId", async (req, res) => {
   try {
@@ -424,6 +490,7 @@ router.get("/product/:productId", async (req, res) => {
       }`
     );
 
+    // ---------- LOAD PRICING RULES ----------
     const pricingRule = await PricingRule.findOne({ shopDomain: SHOPIFY_SHOP });
     if (!pricingRule) {
       return res.json({
@@ -432,6 +499,7 @@ router.get("/product/:productId", async (req, res) => {
       });
     }
 
+    // ---------- FETCH PRODUCT FROM SHOPIFY ----------
     const productQuery = `
       query {
         product(id: "gid://shopify/Product/${productId}") {
@@ -468,10 +536,12 @@ router.get("/product/:productId", async (req, res) => {
     );
     const currencyCode = product.priceRangeV2.minVariantPrice.currencyCode;
 
+    // ---------- GET PRODUCT OVERRIDE ----------
     const override = pricingRule.productOverrides.find(
       (p) => p.productId === productId
     );
 
+    // ---------- CALCULATE PRO PRICE ----------
     let proPrice;
     let hasOverride = false;
     if (override) {
@@ -484,6 +554,7 @@ router.get("/product/:productId", async (req, res) => {
       proPrice = regularPrice * (1 - pricingRule.defaultDiscount / 100);
     }
 
+    // ---------- GET CUSTOMER STATUS ----------
     let customerStatus = {
       isLoggedIn: false,
       isPending: false,
@@ -513,13 +584,14 @@ router.get("/product/:productId", async (req, res) => {
         customerStatus.isApproved = tags.includes("pro-pricing");
         customerStatus.isRejected = tags.includes("rejected");
 
+        // Determine account type from tags
         if (tags.includes("student")) customerStatus.accountType = "student";
         else if (tags.includes("esthetician"))
           customerStatus.accountType = "esthetician";
         else if (tags.includes("salon")) customerStatus.accountType = "salon";
         else customerStatus.accountType = "consumer";
 
-        // Check dynamic MOQ
+        // Get MOQ for this customer type
         if (override?.customerMOQ) {
           customerStatus.moq =
             override.customerMOQ.get(customerStatus.accountType) || null;
@@ -531,23 +603,39 @@ router.get("/product/:productId", async (req, res) => {
       }
     }
 
+    // ---------- GET QUANTITY TIERS ----------
     let tiers = [];
-    if (
-      customerStatus.isApproved &&
-      override &&
-      override.tiers &&
-      override.tiers.length > 0
-    ) {
-      tiers = override.tiers
-        .map((tier) => ({
-          qty: tier.qty,
-          discount: tier.discount,
-          price: regularPrice * (1 - tier.discount / 100),
-          savings: tier.discount,
-        }))
-        .sort((a, b) => a.qty - b.qty);
+    if (customerStatus.isApproved && override) {
+      // Check per-type tiers first
+      if (override.customerTiers && override.customerTiers.size > 0) {
+        const typeTiers = override.customerTiers.get(
+          customerStatus.accountType
+        );
+        if (typeTiers && typeTiers.length > 0) {
+          tiers = typeTiers
+            .map((tier) => ({
+              qty: tier.qty,
+              discount: tier.discount,
+              price: regularPrice * (1 - tier.discount / 100),
+              savings: tier.discount,
+            }))
+            .sort((a, b) => a.qty - b.qty);
+        }
+      }
+      // Fallback to global tiers
+      else if (override.tiers && override.tiers.length > 0) {
+        tiers = override.tiers
+          .map((tier) => ({
+            qty: tier.qty,
+            discount: tier.discount,
+            price: regularPrice * (1 - tier.discount / 100),
+            savings: tier.discount,
+          }))
+          .sort((a, b) => a.qty - b.qty);
+      }
     }
 
+    // ---------- SEND RESPONSE ----------
     res.json({
       success: true,
       productId,
@@ -566,7 +654,8 @@ router.get("/product/:productId", async (req, res) => {
 });
 
 // ========================================
-// GET CART DISCOUNT (Shopify Function)
+// GET /api/pricing/cart-discount
+// Calculate discount for cart (Shopify Function)
 // ========================================
 router.get("/cart-discount", async (req, res) => {
   try {
@@ -582,6 +671,7 @@ router.get("/cart-discount", async (req, res) => {
     let discountType = "none";
     let accountType = "consumer";
 
+    // ---------- CHECK IF CUSTOMER IS LOGGED IN ----------
     if (!customerId) {
       return res.json({
         success: true,
@@ -591,6 +681,7 @@ router.get("/cart-discount", async (req, res) => {
       });
     }
 
+    // ---------- FETCH CUSTOMER DATA ----------
     try {
       const customerQuery = `
         query {
@@ -624,6 +715,8 @@ router.get("/cart-discount", async (req, res) => {
 
       const customerTags = customerData.tags;
       const isApproved = customerTags.includes("pro-pricing");
+
+      // Check if customer is approved
       if (!isApproved) {
         return res.json({
           success: true,
@@ -633,6 +726,7 @@ router.get("/cart-discount", async (req, res) => {
         });
       }
 
+      // Determine account type
       if (customerTags.includes("student")) accountType = "student";
       else if (customerTags.includes("esthetician"))
         accountType = "esthetician";
@@ -647,6 +741,7 @@ router.get("/cart-discount", async (req, res) => {
       });
     }
 
+    // ---------- LOAD PRICING RULES ----------
     const pricingRule = await PricingRule.findOne({ shopDomain: SHOPIFY_SHOP });
     if (!pricingRule) {
       return res.json({
@@ -657,10 +752,12 @@ router.get("/cart-discount", async (req, res) => {
       });
     }
 
+    // ---------- GET PRODUCT OVERRIDE ----------
     const override = pricingRule.productOverrides.find(
       (p) => p.productId === productId
     );
 
+    // ---------- CALCULATE BASE DISCOUNT ----------
     let baseDiscount = 0;
     if (override && override.type === "percentage") {
       baseDiscount = override.value;
@@ -668,29 +765,48 @@ router.get("/cart-discount", async (req, res) => {
       baseDiscount = pricingRule.defaultDiscount;
     }
 
-    if (override && override.tiers && override.tiers.length > 0) {
-      const sortedTiers = override.tiers
-        .filter((tier) => parseInt(quantity) >= tier.qty)
-        .sort((a, b) => b.qty - a.qty);
+    // ---------- CHECK QUANTITY TIERS ----------
+    if (override) {
+      let tiersToCheck = [];
 
-      if (sortedTiers.length > 0) {
-        const additionalDiscount = sortedTiers[0].discount;
-        const combinedMultiplier =
-          (1 - baseDiscount / 100) * (1 - additionalDiscount / 100);
-        discountPercent = (1 - combinedMultiplier) * 100;
-        discountType = "tier";
+      // Check per-type tiers first
+      if (override.customerTiers && override.customerTiers.size > 0) {
+        const typeTiers = override.customerTiers.get(accountType);
+        if (typeTiers && typeTiers.length > 0) {
+          tiersToCheck = typeTiers;
+        }
+      }
+      // Fallback to global tiers
+      else if (override.tiers && override.tiers.length > 0) {
+        tiersToCheck = override.tiers;
+      }
+
+      // Apply tier discount if quantity qualifies
+      if (tiersToCheck.length > 0) {
+        const sortedTiers = tiersToCheck
+          .filter((tier) => parseInt(quantity) >= tier.qty)
+          .sort((a, b) => b.qty - a.qty);
+
+        if (sortedTiers.length > 0) {
+          const additionalDiscount = sortedTiers[0].discount;
+          const combinedMultiplier =
+            (1 - baseDiscount / 100) * (1 - additionalDiscount / 100);
+          discountPercent = (1 - combinedMultiplier) * 100;
+          discountType = "tier";
+        } else {
+          discountPercent = baseDiscount;
+          discountType = "base";
+        }
       } else {
         discountPercent = baseDiscount;
-        discountType = "base";
+        discountType = "override";
       }
-    } else if (override) {
-      discountPercent = baseDiscount;
-      discountType = "override";
     } else {
       discountPercent = pricingRule.defaultDiscount;
       discountType = "default";
     }
 
+    // ---------- CHECK MINIMUM ORDER QUANTITY ----------
     let meetsMinimum = true;
     if (override?.customerMOQ) {
       const moq = override.customerMOQ.get(accountType);
@@ -704,6 +820,7 @@ router.get("/cart-discount", async (req, res) => {
       }
     }
 
+    // ---------- SEND RESPONSE ----------
     res.json({
       success: true,
       discount: meetsMinimum ? discountPercent : 0,
@@ -725,4 +842,7 @@ router.get("/cart-discount", async (req, res) => {
   }
 });
 
+// ========================================
+// EXPORT ROUTER
+// ========================================
 module.exports = router;

@@ -19,28 +19,26 @@ const pricingRuleSchema = new mongoose.Schema({
         type: String,
         required: true,
       },
-      // ===== CHANGED: Not required when using customerDiscounts =====
       type: {
         type: String,
         enum: ["fixed", "percentage"],
-        required: false, // Changed from true
+        required: false,
         default: "percentage",
       },
-      // ===== CHANGED: Not required when using customerDiscounts =====
       value: {
         type: Number,
-        required: false, // Changed from true
+        required: false,
         min: 0,
         default: 0,
       },
 
-      // ===== NEW: Dynamic customer types support =====
+      // ===== Dynamic customer types support =====
       enabledTypes: {
         type: [String],
         default: [],
       },
 
-      // ===== FIXED: Changed schema to match what backend sends =====
+      // ===== Per-type discounts =====
       customerDiscounts: {
         type: Map,
         of: new mongoose.Schema(
@@ -57,21 +55,29 @@ const pricingRuleSchema = new mongoose.Schema({
         default: new Map(),
       },
 
-      // ===== NEW: Dynamic per-type MOQ =====
+      // ===== Per-type MOQ =====
       customerMOQ: {
         type: Map,
         of: Number,
         default: new Map(),
       },
 
-      // ===== NEW: Dynamic per-type quantity tiers =====
-      quantityTiers: {
+      // ===== NEW: Per-type quantity tiers =====
+      customerTiers: {
         type: Map,
         of: [
           {
-            id: String,
-            quantity: Number,
-            discountPercent: Number,
+            qty: {
+              type: Number,
+              required: true,
+              min: 1,
+            },
+            discount: {
+              type: Number,
+              required: true,
+              min: 0,
+              max: 100,
+            },
           },
         ],
         default: new Map(),
