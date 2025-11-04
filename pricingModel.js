@@ -19,41 +19,49 @@ const pricingRuleSchema = new mongoose.Schema({
         type: String,
         required: true,
       },
+      // ===== CHANGED: Not required when using customerDiscounts =====
       type: {
         type: String,
         enum: ["fixed", "percentage"],
-        required: true,
+        required: false, // Changed from true
+        default: "percentage",
       },
+      // ===== CHANGED: Not required when using customerDiscounts =====
       value: {
         type: Number,
-        required: true,
+        required: false, // Changed from true
         min: 0,
+        default: 0,
       },
 
       // ===== NEW: Dynamic customer types support =====
       enabledTypes: {
         type: [String],
         default: [],
-        // Example: ["student", "esthetician", "salon", "wholesale_partner"]
       },
 
-      // ===== NEW: Dynamic per-type discounts =====
+      // ===== FIXED: Changed schema to match what backend sends =====
       customerDiscounts: {
         type: Map,
-        of: {
-          value: Number,
-          isPercentage: Boolean,
-        },
-        default: {},
-        // Example: { "student": { value: 15, isPercentage: true } }
+        of: new mongoose.Schema(
+          {
+            value: { type: Number, required: true },
+            type: {
+              type: String,
+              enum: ["percentage", "fixed"],
+              default: "percentage",
+            },
+          },
+          { _id: false }
+        ),
+        default: new Map(),
       },
 
       // ===== NEW: Dynamic per-type MOQ =====
       customerMOQ: {
         type: Map,
         of: Number,
-        default: {},
-        // Example: { "student": 1, "esthetician": 2, "salon": 5 }
+        default: new Map(),
       },
 
       // ===== NEW: Dynamic per-type quantity tiers =====
@@ -66,8 +74,7 @@ const pricingRuleSchema = new mongoose.Schema({
             discountPercent: Number,
           },
         ],
-        default: {},
-        // Example: { "student": [{ id: "tier_1", quantity: 10, discountPercent: 5 }] }
+        default: new Map(),
       },
 
       // ===== LEGACY: Keep old fields for backward compatibility =====
