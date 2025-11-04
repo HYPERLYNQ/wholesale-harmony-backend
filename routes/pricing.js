@@ -37,31 +37,16 @@ router.get("/products", async (req, res) => {
       });
     }
 
-    // Fetch customer types from Settings
+    // ⭐ Fetch customer types from Settings
     const settings = await Settings.findOne({ shopDomain: SHOPIFY_SHOP });
-    const customerTypes = settings?.customerTypes || [
-      {
-        id: "student",
-        name: "Student",
-        icon: "👨‍🎓",
-        tag: "student",
-        defaultDiscount: 0,
-      },
-      {
-        id: "esthetician",
-        name: "Esthetician",
-        icon: "💅",
-        tag: "esthetician",
-        defaultDiscount: 0,
-      },
-      {
-        id: "salon",
-        name: "Salon",
-        icon: "🏢",
-        tag: "salon",
-        defaultDiscount: 0,
-      },
-    ];
+    const customerTypes = settings?.customerTypes || [];
+
+    console.log(
+      `✅ Loaded ${customerTypes.length} customer types from Settings`
+    );
+    customerTypes.forEach((type) => {
+      console.log(`   ${type.icon} ${type.name}: ${type.defaultDiscount}%`);
+    });
 
     // Fetch products from Shopify
     let query = `first: ${limit}`;
@@ -113,41 +98,25 @@ router.get("/products", async (req, res) => {
         product.priceRangeV2.minVariantPrice.amount
       );
 
-      // Find override
+      // Find product-specific override
       const override = pricingRule.productOverrides.find(
         (p) => p.productId === productId
       );
 
-      // Calculate pricing per customer type
-      let proPrice;
-      let appliedDiscounts = {}; // Per customer type
-      let isCustomDiscount = false;
+      // ⭐ Calculate appliedDiscounts per customer type
+      let appliedDiscounts = {};
 
       if (override && override.value !== undefined) {
-        // Product has custom pricing (applies to all types)
-        proPrice =
-          override.type === "fixed"
-            ? override.value
-            : regularPrice * (1 - override.value / 100);
-
-        // All types use the same custom override
+        // Product has custom pricing - applies to ALL customer types
         customerTypes.forEach((type) => {
           appliedDiscounts[type.id] = {
-            value: override.type === "percentage" ? override.value : null,
-            type: override.type,
+            value: override.value,
+            type: override.type || "percentage",
             isCustom: true,
           };
         });
-        isCustomDiscount = true;
       } else {
-        // Use default from Settings per customer type
-        // Use first customer type's discount for main proPrice
-        const firstType = customerTypes[0];
-        const defaultDiscount =
-          firstType?.defaultDiscount || pricingRule.defaultDiscount || 0;
-        proPrice = regularPrice * (1 - defaultDiscount / 100);
-
-        // Each type gets its own default
+        // No override - use each customer type's default from Settings
         customerTypes.forEach((type) => {
           appliedDiscounts[type.id] = {
             value: type.defaultDiscount || 0,
@@ -155,16 +124,27 @@ router.get("/products", async (req, res) => {
             isCustom: false,
           };
         });
-        isCustomDiscount = false;
       }
 
-      // Build MOQ object by merging Settings defaults with overrides
+      // Calculate main proPrice (use first customer type's discount)
+      let proPrice;
+      if (override && override.value !== undefined) {
+        proPrice =
+          override.type === "fixed"
+            ? override.value
+            : regularPrice * (1 - override.value / 100);
+      } else {
+        const firstTypeDiscount = customerTypes[0]?.defaultDiscount || 0;
+        proPrice = regularPrice * (1 - firstTypeDiscount / 100);
+      }
+
+      // ⭐ Build MOQ object with default/custom distinction
       const moqData = {};
       customerTypes.forEach((type) => {
         let moqValue = null;
         let isDefault = true;
 
-        // Check if there's a product-specific override
+        // Check product-specific override
         if (override?.customerMOQ && override.customerMOQ.has(type.id)) {
           moqValue = override.customerMOQ.get(type.id);
           isDefault = false;
@@ -177,10 +157,12 @@ router.get("/products", async (req, res) => {
           isDefault = true;
         }
 
-        moqData[type.id] = {
-          value: moqValue,
-          isDefault: isDefault,
-        };
+        if (moqValue > 0) {
+          moqData[type.id] = {
+            value: moqValue,
+            isDefault: isDefault,
+          };
+        }
       });
 
       return {
@@ -188,13 +170,12 @@ router.get("/products", async (req, res) => {
         title: product.title,
         regularPrice,
         proPrice,
-        appliedDiscounts, // NEW: Per customer type
-        isCustomDiscount,
+        appliedDiscounts, // ⭐ Per customer type discounts
         productType: product.productType || "Uncategorized",
         vendor: product.vendor || "Unknown",
         image: product.featuredImage?.url,
         override: override || null,
-        moq: moqData,
+        moq: moqData, // ⭐ Per customer type MOQ with default/custom flag
       };
     });
 
@@ -207,11 +188,15 @@ router.get("/products", async (req, res) => {
       filtered = filtered.filter((p) => p.vendor === vendor);
     }
 
+    console.log(
+      `✅ Returning ${filtered.length} products with per-type pricing`
+    );
+
     res.json({
       success: true,
       products: filtered,
-      defaultDiscount: pricingRule.defaultDiscount, // Kept for backwards compat
-      customerTypes,
+      defaultDiscount: pricingRule.defaultDiscount, // Legacy
+      customerTypes, // ⭐ Include customer types array
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
@@ -225,7 +210,7 @@ router.get("/products", async (req, res) => {
 });
 
 // ========================================
-// UPDATE DEFAULT DISCOUNT (LEGACY - kept for compat)
+// UPDATE DEFAULT DISCOUNT (LEGACY)
 // ========================================
 router.put("/default", async (req, res) => {
   try {
@@ -610,7 +595,6 @@ router.get("/cart-discount", async (req, res) => {
     }
 
     let meetsMinimum = true;
-    // Check dynamic MOQ
     if (override?.customerMOQ) {
       const moq = override.customerMOQ.get(accountType);
       if (moq && parseInt(quantity) < moq) {
