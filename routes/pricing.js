@@ -307,9 +307,11 @@ router.post("/bulk-update", async (req, res) => {
       if (update.typeDiscounts) {
         update.customerDiscounts = update.typeDiscounts;
         delete update.typeDiscounts;
-        // Remove old value/type since we're using per-type now
-        delete update.value;
-        delete update.type;
+
+        // Schema requires value/type, so add placeholders for per-type mode
+        // These won't be used since customerDiscounts takes precedence
+        if (!update.value) update.value = 0;
+        if (!update.type) update.type = "percentage";
       }
 
       // Convert moq object to Map for customerMOQ
