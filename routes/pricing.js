@@ -41,7 +41,12 @@ router.get("/products", async (req, res) => {
     const settings = await Settings.findOne({ shopDomain: SHOPIFY_SHOP });
     const customerTypes = settings?.customerTypes || [
       { id: "student", name: "Student", icon: "👨‍🎓", tag: "student" },
-      { id: "esthetician", name: "Esthetician", icon: "💅", tag: "esthetician" },
+      {
+        id: "esthetician",
+        name: "Esthetician",
+        icon: "💅",
+        tag: "esthetician",
+      },
       { id: "salon", name: "Salon", icon: "🏢", tag: "salon" },
     ];
 
@@ -100,41 +105,69 @@ router.get("/products", async (req, res) => {
         (p) => p.productId === productId
       );
 
+      // Calculate pricing
       let proPrice;
-      if (override) {
+      let appliedDiscount;
+      let isCustomDiscount = false;
+
+      if (override && override.value !== undefined) {
+        // Product has custom pricing
         proPrice =
           override.type === "fixed"
             ? override.value
             : regularPrice * (1 - override.value / 100);
+        appliedDiscount =
+          override.type === "percentage" ? override.value : null;
+        isCustomDiscount = true;
       } else {
-        proPrice = regularPrice * (1 - pricingRule.defaultDiscount / 100);
+        // Use default from Settings (first customer type) or global default
+        const defaultCustomerType = customerTypes[0];
+        const defaultDiscount =
+          defaultCustomerType?.defaultDiscount ||
+          pricingRule.defaultDiscount ||
+          0;
+        proPrice = regularPrice * (1 - defaultDiscount / 100);
+        appliedDiscount = defaultDiscount;
+        isCustomDiscount = false;
       }
 
-      // Convert customerMOQ Map to plain object
-      const customerMOQ = {};
-      if (override?.customerMOQ) {
-        for (const [key, value] of override.customerMOQ.entries()) {
-          customerMOQ[key] = value;
+      // Build MOQ object by merging Settings defaults with overrides
+      const moqData = {};
+      customerTypes.forEach((type) => {
+        let moqValue = null;
+        let isDefault = true;
+
+        // Check if there's a product-specific override
+        if (override?.customerMOQ && override.customerMOQ.has(type.id)) {
+          moqValue = override.customerMOQ.get(type.id);
+          isDefault = false;
+        } else if (override?.moq && override.moq[type.id] !== undefined) {
+          moqValue = override.moq[type.id];
+          isDefault = false;
+        } else {
+          // Use default from Settings
+          moqValue = type.moqDefault || 0;
+          isDefault = true;
         }
-      }
 
-      // Legacy fallback
-      const moq = override?.moq || {
-        student: null,
-        esthetician: null,
-        salon: null,
-      };
+        moqData[type.id] = {
+          value: moqValue,
+          isDefault: isDefault,
+        };
+      });
 
       return {
         id: productId,
         title: product.title,
         regularPrice,
         proPrice,
+        appliedDiscount,
+        isCustomDiscount, // Flag to show if discount is overridden
         productType: product.productType || "Uncategorized",
         vendor: product.vendor || "Unknown",
         image: product.featuredImage?.url,
         override: override || null,
-        moq: Object.keys(customerMOQ).length > 0 ? customerMOQ : moq,
+        moq: moqData, // Now includes isDefault flag
       };
     });
 
