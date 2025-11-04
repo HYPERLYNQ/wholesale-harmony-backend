@@ -169,7 +169,9 @@ app.use(express.urlencoded({ extended: true }));
 
 // ========== PRICING ROUTES ==========
 const pricingRoutes = require("./routes/pricing");
+const settingsRoutes = require("./routes/settings");
 app.use("/api/pricing", pricingRoutes);
+app.use("/api/settings", settingsRoutes);
 
 // Test route
 app.get("/", (req, res) => {

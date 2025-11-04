@@ -8,7 +8,7 @@ const pricingRuleSchema = new mongoose.Schema({
 
   defaultDiscount: {
     type: Number,
-    default: 0, // Default percentage discount for all products
+    default: 0,
     min: 0,
     max: 100,
   },
@@ -29,6 +29,48 @@ const pricingRuleSchema = new mongoose.Schema({
         required: true,
         min: 0,
       },
+
+      // ===== NEW: Dynamic customer types support =====
+      enabledTypes: {
+        type: [String],
+        default: [],
+        // Example: ["student", "esthetician", "salon", "wholesale_partner"]
+      },
+
+      // ===== NEW: Dynamic per-type discounts =====
+      customerDiscounts: {
+        type: Map,
+        of: {
+          value: Number,
+          isPercentage: Boolean,
+        },
+        default: {},
+        // Example: { "student": { value: 15, isPercentage: true } }
+      },
+
+      // ===== NEW: Dynamic per-type MOQ =====
+      customerMOQ: {
+        type: Map,
+        of: Number,
+        default: {},
+        // Example: { "student": 1, "esthetician": 2, "salon": 5 }
+      },
+
+      // ===== NEW: Dynamic per-type quantity tiers =====
+      quantityTiers: {
+        type: Map,
+        of: [
+          {
+            id: String,
+            quantity: Number,
+            discountPercent: Number,
+          },
+        ],
+        default: {},
+        // Example: { "student": [{ id: "tier_1", quantity: 10, discountPercent: 5 }] }
+      },
+
+      // ===== LEGACY: Keep old fields for backward compatibility =====
       moq: {
         student: {
           type: Number,
@@ -61,6 +103,7 @@ const pricingRuleSchema = new mongoose.Schema({
           },
         },
       ],
+
       updatedAt: {
         type: Date,
         default: Date.now,

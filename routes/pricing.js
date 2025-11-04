@@ -1,13 +1,20 @@
-// routes/pricing.js
+// ========================================
+// PRICING ROUTES - WHOLESALE HARMONY
+// Dynamic customer types support
+// ========================================
+
 const express = require("express");
 const router = express.Router();
 const axios = require("axios");
 const PricingRule = require("../pricingModel");
+const Settings = require("../settingsModel");
 
 const SHOPIFY_SHOP = `${process.env.SHOPIFY_SHOP_NAME}.myshopify.com`;
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
-// Get products with pricing data
+// ========================================
+// GET PRODUCTS WITH PRICING
+// ========================================
 router.get("/products", async (req, res) => {
   try {
     const {
@@ -17,23 +24,29 @@ router.get("/products", async (req, res) => {
       productType = "",
       vendor = "",
     } = req.query;
-    const shopDomain = process.env.SHOPIFY_SHOP_NAME + ".myshopify.com";
 
     console.log("📊 Fetching products for pricing...");
 
-    // Get pricing rules from MongoDB
-    let pricingRule = await PricingRule.findOne({ shopDomain });
+    // Get pricing rules
+    let pricingRule = await PricingRule.findOne({ shopDomain: SHOPIFY_SHOP });
     if (!pricingRule) {
       pricingRule = await PricingRule.create({
-        shopDomain,
+        shopDomain: SHOPIFY_SHOP,
         defaultDiscount: 0,
         productOverrides: [],
       });
     }
 
-    // Fetch products from Shopify with filters
-    let query = `first: ${limit}`;
+    // Fetch customer types from Settings
+    const settings = await Settings.findOne({ shopDomain: SHOPIFY_SHOP });
+    const customerTypes = settings?.customerTypes || [
+      { id: "student", name: "Student", icon: "👨‍🎓", tag: "student" },
+      { id: "esthetician", name: "Esthetician", icon: "💅", tag: "esthetician" },
+      { id: "salon", name: "Salon", icon: "🏢", tag: "salon" },
+    ];
 
+    // Fetch products from Shopify
+    let query = `first: ${limit}`;
     if (search) {
       query += `, query: "title:*${search}*"`;
     }
@@ -65,11 +78,11 @@ router.get("/products", async (req, res) => {
     `;
 
     const productsResponse = await axios.post(
-      `https://${shopDomain}/admin/api/2024-10/graphql.json`,
+      `https://${SHOPIFY_SHOP}/admin/api/2024-10/graphql.json`,
       { query: productsQuery },
       {
         headers: {
-          "X-Shopify-Access-Token": process.env.SHOPIFY_ACCESS_TOKEN,
+          "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
           "Content-Type": "application/json",
         },
       }
@@ -82,7 +95,7 @@ router.get("/products", async (req, res) => {
         product.priceRangeV2.minVariantPrice.amount
       );
 
-      // Find override in MongoDB
+      // Find override
       const override = pricingRule.productOverrides.find(
         (p) => p.productId === productId
       );
@@ -97,6 +110,21 @@ router.get("/products", async (req, res) => {
         proPrice = regularPrice * (1 - pricingRule.defaultDiscount / 100);
       }
 
+      // Convert customerMOQ Map to plain object
+      const customerMOQ = {};
+      if (override?.customerMOQ) {
+        for (const [key, value] of override.customerMOQ.entries()) {
+          customerMOQ[key] = value;
+        }
+      }
+
+      // Legacy fallback
+      const moq = override?.moq || {
+        student: null,
+        esthetician: null,
+        salon: null,
+      };
+
       return {
         id: productId,
         title: product.title,
@@ -106,11 +134,11 @@ router.get("/products", async (req, res) => {
         vendor: product.vendor || "Unknown",
         image: product.featuredImage?.url,
         override: override || null,
-        moq: override?.moq || { student: null, esthetician: null, salon: null },
+        moq: Object.keys(customerMOQ).length > 0 ? customerMOQ : moq,
       };
     });
 
-    // Apply frontend filters
+    // Apply filters
     let filtered = products;
     if (productType) {
       filtered = filtered.filter((p) => p.productType === productType);
@@ -123,6 +151,7 @@ router.get("/products", async (req, res) => {
       success: true,
       products: filtered,
       defaultDiscount: pricingRule.defaultDiscount,
+      customerTypes,
       pagination: {
         page: parseInt(page),
         limit: parseInt(limit),
@@ -135,14 +164,15 @@ router.get("/products", async (req, res) => {
   }
 });
 
-// Update default discount
+// ========================================
+// UPDATE DEFAULT DISCOUNT
+// ========================================
 router.put("/default", async (req, res) => {
   try {
     const { discount } = req.body;
-    const shopDomain = process.env.SHOPIFY_SHOP_NAME + ".myshopify.com";
 
     const pricingRule = await PricingRule.findOneAndUpdate(
-      { shopDomain },
+      { shopDomain: SHOPIFY_SHOP },
       { defaultDiscount: discount, updatedAt: new Date() },
       { new: true, upsert: true }
     );
@@ -155,15 +185,19 @@ router.put("/default", async (req, res) => {
   }
 });
 
-// Bulk update product pricing
+// ========================================
+// BULK UPDATE PRODUCTS
+// ========================================
 router.post("/bulk-update", async (req, res) => {
   try {
     const { products } = req.body;
-    const shopDomain = process.env.SHOPIFY_SHOP_NAME + ".myshopify.com";
 
-    let pricingRule = await PricingRule.findOne({ shopDomain });
+    let pricingRule = await PricingRule.findOne({ shopDomain: SHOPIFY_SHOP });
     if (!pricingRule) {
-      pricingRule = new PricingRule({ shopDomain, productOverrides: [] });
+      pricingRule = new PricingRule({
+        shopDomain: SHOPIFY_SHOP,
+        productOverrides: [],
+      });
     }
 
     products.forEach((update) => {
@@ -171,8 +205,20 @@ router.post("/bulk-update", async (req, res) => {
         (p) => p.productId === update.productId
       );
 
+      // Convert moq object to Map for customerMOQ
+      if (update.moq && typeof update.moq === "object") {
+        const moqMap = new Map();
+        Object.entries(update.moq).forEach(([key, value]) => {
+          if (value !== null && value !== undefined) {
+            moqMap.set(key, value);
+          }
+        });
+        update.customerMOQ = moqMap;
+      }
+
       if (existingIndex >= 0) {
         pricingRule.productOverrides[existingIndex] = {
+          ...pricingRule.productOverrides[existingIndex],
           ...update,
           updatedAt: new Date(),
         };
@@ -195,13 +241,14 @@ router.post("/bulk-update", async (req, res) => {
   }
 });
 
-// Reset product pricing
+// ========================================
+// RESET PRODUCTS TO DEFAULT
+// ========================================
 router.post("/reset", async (req, res) => {
   try {
     const { productIds } = req.body;
-    const shopDomain = process.env.SHOPIFY_SHOP_NAME + ".myshopify.com";
 
-    const pricingRule = await PricingRule.findOne({ shopDomain });
+    const pricingRule = await PricingRule.findOne({ shopDomain: SHOPIFY_SHOP });
     if (!pricingRule) {
       return res.json({ success: true, removed: 0 });
     }
@@ -221,12 +268,13 @@ router.post("/reset", async (req, res) => {
   }
 });
 
-// Get product pricing for theme (NEW ENDPOINT)
+// ========================================
+// GET SINGLE PRODUCT PRICING (Theme)
+// ========================================
 router.get("/product/:productId", async (req, res) => {
   try {
     const { productId } = req.params;
     const { customerId } = req.query;
-    const shopDomain = process.env.SHOPIFY_SHOP_NAME + ".myshopify.com";
 
     console.log(
       `🏷️ Fetching pricing for product ${productId}, customer ${
@@ -234,7 +282,7 @@ router.get("/product/:productId", async (req, res) => {
       }`
     );
 
-    const pricingRule = await PricingRule.findOne({ shopDomain });
+    const pricingRule = await PricingRule.findOne({ shopDomain: SHOPIFY_SHOP });
     if (!pricingRule) {
       return res.json({
         success: false,
@@ -258,7 +306,7 @@ router.get("/product/:productId", async (req, res) => {
     `;
 
     const productResponse = await axios.post(
-      `https://${shopDomain}/admin/api/2024-10/graphql.json`,
+      `https://${SHOPIFY_SHOP}/admin/api/2024-10/graphql.json`,
       { query: productQuery },
       {
         headers: {
@@ -306,7 +354,7 @@ router.get("/product/:productId", async (req, res) => {
     if (customerId) {
       try {
         const customerResponse = await axios.get(
-          `https://${shopDomain}/admin/api/2024-10/customers/${customerId}.json`,
+          `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
           {
             headers: {
               "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
@@ -329,7 +377,11 @@ router.get("/product/:productId", async (req, res) => {
         else if (tags.includes("salon")) customerStatus.accountType = "salon";
         else customerStatus.accountType = "consumer";
 
-        if (override && override.moq) {
+        // Check dynamic MOQ
+        if (override?.customerMOQ) {
+          customerStatus.moq =
+            override.customerMOQ.get(customerStatus.accountType) || null;
+        } else if (override?.moq) {
           customerStatus.moq = override.moq[customerStatus.accountType];
         }
       } catch (err) {
@@ -371,11 +423,12 @@ router.get("/product/:productId", async (req, res) => {
   }
 });
 
-// Get cart discount for Shopify Function (NEW)
+// ========================================
+// GET CART DISCOUNT (Shopify Function)
+// ========================================
 router.get("/cart-discount", async (req, res) => {
   try {
     const { customerId, productId, quantity = 1 } = req.query;
-    const shopDomain = process.env.SHOPIFY_SHOP_NAME + ".myshopify.com";
 
     console.log(
       `🛒 Cart discount check: Product ${productId}, Customer ${
@@ -383,12 +436,10 @@ router.get("/cart-discount", async (req, res) => {
       }, Qty ${quantity}`
     );
 
-    // Default: no discount
     let discountPercent = 0;
     let discountType = "none";
     let accountType = "consumer";
 
-    // Step 1: Check customer status
     if (!customerId) {
       return res.json({
         success: true,
@@ -398,9 +449,6 @@ router.get("/cart-discount", async (req, res) => {
       });
     }
 
-    // Fetch customer from Shopify
-
-    // Fetch customer from Shopify using GraphQL
     try {
       const customerQuery = `
         query {
@@ -412,7 +460,7 @@ router.get("/cart-discount", async (req, res) => {
       `;
 
       const customerResponse = await axios.post(
-        `https://${shopDomain}/admin/api/2024-10/graphql.json`,
+        `https://${SHOPIFY_SHOP}/admin/api/2024-10/graphql.json`,
         { query: customerQuery },
         {
           headers: {
@@ -433,8 +481,6 @@ router.get("/cart-discount", async (req, res) => {
       }
 
       const customerTags = customerData.tags;
-
-      // Check if approved
       const isApproved = customerTags.includes("pro-pricing");
       if (!isApproved) {
         return res.json({
@@ -445,7 +491,6 @@ router.get("/cart-discount", async (req, res) => {
         });
       }
 
-      // Determine account type
       if (customerTags.includes("student")) accountType = "student";
       else if (customerTags.includes("esthetician"))
         accountType = "esthetician";
@@ -460,8 +505,7 @@ router.get("/cart-discount", async (req, res) => {
       });
     }
 
-    // Step 2: Get pricing rules
-    const pricingRule = await PricingRule.findOne({ shopDomain });
+    const pricingRule = await PricingRule.findOne({ shopDomain: SHOPIFY_SHOP });
     if (!pricingRule) {
       return res.json({
         success: true,
@@ -471,15 +515,10 @@ router.get("/cart-discount", async (req, res) => {
       });
     }
 
-    // Step 3: Check for product override
     const override = pricingRule.productOverrides.find(
       (p) => p.productId === productId
     );
 
-    // Step 4: Calculate discount based on quantity and tiers
-    // Tiers are ADDITIONAL % off the pro price, not total discount
-
-    // Get base discount first
     let baseDiscount = 0;
     if (override && override.type === "percentage") {
       baseDiscount = override.value;
@@ -488,42 +527,36 @@ router.get("/cart-discount", async (req, res) => {
     }
 
     if (override && override.tiers && override.tiers.length > 0) {
-      // Find applicable tier based on quantity
       const sortedTiers = override.tiers
         .filter((tier) => parseInt(quantity) >= tier.qty)
         .sort((a, b) => b.qty - a.qty);
 
       if (sortedTiers.length > 0) {
-        // Tier discount is ADDITIONAL % off the pro price
-        // Example: Base 27% off regular = $21.17
-        //          Then tier 10% off $21.17 = $19.05
-        //          Total discount from regular: 34.3%
         const additionalDiscount = sortedTiers[0].discount;
-
-        // Calculate combined discount
         const combinedMultiplier =
           (1 - baseDiscount / 100) * (1 - additionalDiscount / 100);
         discountPercent = (1 - combinedMultiplier) * 100;
-
         discountType = "tier";
       } else {
-        // Below all tiers, use base discount only
         discountPercent = baseDiscount;
         discountType = "base";
       }
     } else if (override) {
-      // Product override without tiers
       discountPercent = baseDiscount;
       discountType = "override";
     } else {
-      // Default discount
       discountPercent = pricingRule.defaultDiscount;
       discountType = "default";
     }
 
-    // Step 5: Check MOQ
     let meetsMinimum = true;
-    if (override && override.moq && override.moq[accountType]) {
+    // Check dynamic MOQ
+    if (override?.customerMOQ) {
+      const moq = override.customerMOQ.get(accountType);
+      if (moq && parseInt(quantity) < moq) {
+        meetsMinimum = false;
+      }
+    } else if (override?.moq?.[accountType]) {
       const moq = override.moq[accountType];
       if (moq && parseInt(quantity) < moq) {
         meetsMinimum = false;
