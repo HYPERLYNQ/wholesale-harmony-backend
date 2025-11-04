@@ -13,12 +13,16 @@ const Settings = require("../settingsModel");
    ======================================== */
 router.get("/", async (req, res) => {
   try {
-    let settings = await Settings.findOne();
+    const shop =
+      req.query.shop || `${process.env.SHOPIFY_SHOP_NAME}.myshopify.com`;
+
+    let settings = await Settings.findOne({ shopDomain: shop });
 
     // Create default settings if none exist
     if (!settings) {
-      console.log("📝 No settings found, creating defaults...");
+      console.log(`📝 No settings found for ${shop}, creating defaults...`);
       settings = await Settings.create({
+        shopDomain: shop,
         customerTypes: [],
       });
     }
@@ -42,16 +46,20 @@ router.get("/", async (req, res) => {
    ======================================== */
 router.put("/", async (req, res) => {
   try {
-    const { customerTypes } = req.body;
+    const { customerTypes, shop } = req.body;
+    const shopDomain = shop || `${process.env.SHOPIFY_SHOP_NAME}.myshopify.com`;
 
-    let settings = await Settings.findOne();
+    let settings = await Settings.findOne({ shopDomain });
 
     if (!settings) {
-      console.log("📝 Creating new settings document...");
-      settings = await Settings.create({ customerTypes });
+      console.log(`📝 Creating new settings for ${shopDomain}...`);
+      settings = await Settings.create({
+        shopDomain,
+        customerTypes,
+      });
     } else {
       console.log(
-        `📝 Updating settings with ${customerTypes.length} customer types...`
+        `📝 Updating settings for ${shopDomain} with ${customerTypes.length} customer types...`
       );
       settings.customerTypes = customerTypes;
       settings.updatedAt = Date.now();
