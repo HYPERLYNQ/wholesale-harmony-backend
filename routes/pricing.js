@@ -1,6 +1,6 @@
 // ========================================
 // PRICING ROUTES - WHOLESALE HARMONY
-// Dynamic customer types support
+// Per-customer-type default discounts
 // ========================================
 
 const express = require("express");
@@ -40,14 +40,27 @@ router.get("/products", async (req, res) => {
     // Fetch customer types from Settings
     const settings = await Settings.findOne({ shopDomain: SHOPIFY_SHOP });
     const customerTypes = settings?.customerTypes || [
-      { id: "student", name: "Student", icon: "👨‍🎓", tag: "student" },
+      {
+        id: "student",
+        name: "Student",
+        icon: "👨‍🎓",
+        tag: "student",
+        defaultDiscount: 0,
+      },
       {
         id: "esthetician",
         name: "Esthetician",
         icon: "💅",
         tag: "esthetician",
+        defaultDiscount: 0,
       },
-      { id: "salon", name: "Salon", icon: "🏢", tag: "salon" },
+      {
+        id: "salon",
+        name: "Salon",
+        icon: "🏢",
+        tag: "salon",
+        defaultDiscount: 0,
+      },
     ];
 
     // Fetch products from Shopify
@@ -105,29 +118,43 @@ router.get("/products", async (req, res) => {
         (p) => p.productId === productId
       );
 
-      // Calculate pricing
+      // Calculate pricing per customer type
       let proPrice;
-      let appliedDiscount;
+      let appliedDiscounts = {}; // Per customer type
       let isCustomDiscount = false;
 
       if (override && override.value !== undefined) {
-        // Product has custom pricing
+        // Product has custom pricing (applies to all types)
         proPrice =
           override.type === "fixed"
             ? override.value
             : regularPrice * (1 - override.value / 100);
-        appliedDiscount =
-          override.type === "percentage" ? override.value : null;
+
+        // All types use the same custom override
+        customerTypes.forEach((type) => {
+          appliedDiscounts[type.id] = {
+            value: override.type === "percentage" ? override.value : null,
+            type: override.type,
+            isCustom: true,
+          };
+        });
         isCustomDiscount = true;
       } else {
-        // Use default from Settings (first customer type) or global default
-        const defaultCustomerType = customerTypes[0];
+        // Use default from Settings per customer type
+        // Use first customer type's discount for main proPrice
+        const firstType = customerTypes[0];
         const defaultDiscount =
-          defaultCustomerType?.defaultDiscount ||
-          pricingRule.defaultDiscount ||
-          0;
+          firstType?.defaultDiscount || pricingRule.defaultDiscount || 0;
         proPrice = regularPrice * (1 - defaultDiscount / 100);
-        appliedDiscount = defaultDiscount;
+
+        // Each type gets its own default
+        customerTypes.forEach((type) => {
+          appliedDiscounts[type.id] = {
+            value: type.defaultDiscount || 0,
+            type: "percentage",
+            isCustom: false,
+          };
+        });
         isCustomDiscount = false;
       }
 
@@ -161,13 +188,13 @@ router.get("/products", async (req, res) => {
         title: product.title,
         regularPrice,
         proPrice,
-        appliedDiscount,
-        isCustomDiscount, // Flag to show if discount is overridden
+        appliedDiscounts, // NEW: Per customer type
+        isCustomDiscount,
         productType: product.productType || "Uncategorized",
         vendor: product.vendor || "Unknown",
         image: product.featuredImage?.url,
         override: override || null,
-        moq: moqData, // Now includes isDefault flag
+        moq: moqData,
       };
     });
 
@@ -183,7 +210,7 @@ router.get("/products", async (req, res) => {
     res.json({
       success: true,
       products: filtered,
-      defaultDiscount: pricingRule.defaultDiscount,
+      defaultDiscount: pricingRule.defaultDiscount, // Kept for backwards compat
       customerTypes,
       pagination: {
         page: parseInt(page),
@@ -198,7 +225,7 @@ router.get("/products", async (req, res) => {
 });
 
 // ========================================
-// UPDATE DEFAULT DISCOUNT
+// UPDATE DEFAULT DISCOUNT (LEGACY - kept for compat)
 // ========================================
 router.put("/default", async (req, res) => {
   try {
