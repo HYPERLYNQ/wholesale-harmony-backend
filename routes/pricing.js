@@ -300,6 +300,8 @@ router.post("/bulk-update", async (req, res) => {
     }
 
     products.forEach((update) => {
+      console.log("🔍 INCOMING UPDATE:", JSON.stringify(update, null, 2));
+
       const existingIndex = pricingRule.productOverrides.findIndex(
         (p) => p.productId === update.productId
       );
@@ -308,6 +310,11 @@ router.post("/bulk-update", async (req, res) => {
       if (update.typeDiscounts) {
         update.customerDiscounts = update.typeDiscounts;
         delete update.typeDiscounts;
+
+        console.log(
+          "✅ CONVERTED TO customerDiscounts:",
+          JSON.stringify(update.customerDiscounts, null, 2)
+        );
 
         // Schema requires value/type, so add placeholders for per-type mode
         // These won't be used since customerDiscounts takes precedence
@@ -325,6 +332,23 @@ router.post("/bulk-update", async (req, res) => {
         });
         update.customerMOQ = moqMap;
       }
+
+      console.log(
+        "💾 FINAL UPDATE OBJECT:",
+        JSON.stringify(
+          {
+            productId: update.productId,
+            type: update.type,
+            value: update.value,
+            customerDiscounts: update.customerDiscounts,
+            customerMOQ: update.customerMOQ
+              ? Object.fromEntries(update.customerMOQ)
+              : null,
+          },
+          null,
+          2
+        )
+      );
 
       if (existingIndex >= 0) {
         pricingRule.productOverrides[existingIndex] = {
