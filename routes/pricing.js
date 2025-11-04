@@ -71,6 +71,13 @@ router.get("/products", async (req, res) => {
               featuredImage {
                 url
               }
+              variants(first: 1) {
+                edges {
+                  node {
+                    sku
+                  }
+                }
+              }
             }
           }
           pageInfo {
@@ -173,9 +180,13 @@ router.get("/products", async (req, res) => {
         }
       });
 
+      // Extract SKU from first variant
+      const sku = product.variants?.edges[0]?.node?.sku || null;
+
       return {
         id: productId,
         title: product.title,
+        sku, // ⭐ Product SKU
         regularPrice,
         proPrice,
         appliedDiscounts, // ⭐ Per customer type discounts
