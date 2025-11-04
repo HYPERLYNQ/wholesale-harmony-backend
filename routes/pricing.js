@@ -107,12 +107,20 @@ router.get("/products", async (req, res) => {
       let appliedDiscounts = {};
 
       if (override && override.value !== undefined) {
-        // Product has custom pricing - applies to ALL customer types
+        // Product has override - check if it matches customer type default
         customerTypes.forEach((type) => {
+          const typeDefault = type.defaultDiscount || 0;
+          const overrideValue = override.value;
+
+          // If override matches the customer type's default, treat as default
+          const isActuallyCustom =
+            (override.type === "percentage" && overrideValue !== typeDefault) ||
+            override.type === "fixed";
+
           appliedDiscounts[type.id] = {
             value: override.value,
             type: override.type || "percentage",
-            isCustom: true,
+            isCustom: isActuallyCustom,
           };
         });
       } else {
