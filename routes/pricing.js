@@ -111,27 +111,11 @@ router.get("/products", async (req, res) => {
       );
 
       // ⭐ Calculate appliedDiscounts per customer type
+      // CRITICAL: Check customerDiscounts FIRST, then value fallback
       let appliedDiscounts = {};
 
-      if (override && override.value !== undefined) {
-        // Product has override - check if it matches customer type default
-        customerTypes.forEach((type) => {
-          const typeDefault = type.defaultDiscount || 0;
-          const overrideValue = override.value;
-
-          // If override matches the customer type's default, treat as default
-          const isActuallyCustom =
-            (override.type === "percentage" && overrideValue !== typeDefault) ||
-            override.type === "fixed";
-
-          appliedDiscounts[type.id] = {
-            value: override.value,
-            type: override.type || "percentage",
-            isCustom: isActuallyCustom,
-          };
-        });
-      } else if (override && override.customerDiscounts) {
-        // NEW: Per-customer-type discounts
+      if (override && override.customerDiscounts) {
+        // ⭐ Per-customer-type discounts - CHECK THIS FIRST!
         customerTypes.forEach((type) => {
           const typeDiscount = override.customerDiscounts[type.id];
           if (typeDiscount) {
@@ -148,6 +132,23 @@ router.get("/products", async (req, res) => {
               isCustom: false,
             };
           }
+        });
+      } else if (override && override.value !== undefined) {
+        // Global discount mode
+        customerTypes.forEach((type) => {
+          const typeDefault = type.defaultDiscount || 0;
+          const overrideValue = override.value;
+
+          // If override matches the customer type's default, treat as default
+          const isActuallyCustom =
+            (override.type === "percentage" && overrideValue !== typeDefault) ||
+            override.type === "fixed";
+
+          appliedDiscounts[type.id] = {
+            value: override.value,
+            type: override.type || "percentage",
+            isCustom: isActuallyCustom,
+          };
         });
       } else {
         // No override - use each customer type's default from Settings
