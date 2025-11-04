@@ -114,10 +114,14 @@ router.get("/products", async (req, res) => {
       // CRITICAL: Check customerDiscounts FIRST, then value fallback
       let appliedDiscounts = {};
 
-      if (override && override.customerDiscounts) {
+      if (
+        override &&
+        override.customerDiscounts &&
+        override.customerDiscounts.size > 0
+      ) {
         // ⭐ Per-customer-type discounts - CHECK THIS FIRST!
         customerTypes.forEach((type) => {
-          const typeDiscount = override.customerDiscounts[type.id];
+          const typeDiscount = override.customerDiscounts.get(type.id); // ✅ Use .get() for Map
           if (typeDiscount) {
             appliedDiscounts[type.id] = {
               value: typeDiscount.value,
@@ -163,10 +167,14 @@ router.get("/products", async (req, res) => {
 
       // Calculate main proPrice (use first customer type's discount)
       let proPrice;
-      if (override && override.customerDiscounts) {
+      if (
+        override &&
+        override.customerDiscounts &&
+        override.customerDiscounts.size > 0
+      ) {
         // Per-type discounts: use first type's discount
         const firstType = customerTypes[0];
-        const firstTypeDiscount = override.customerDiscounts[firstType.id];
+        const firstTypeDiscount = override.customerDiscounts.get(firstType.id); // ✅ Use .get()
         if (firstTypeDiscount) {
           proPrice =
             firstTypeDiscount.type === "fixed"
