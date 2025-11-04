@@ -130,6 +130,25 @@ router.get("/products", async (req, res) => {
             isCustom: isActuallyCustom,
           };
         });
+      } else if (override && override.customerDiscounts) {
+        // NEW: Per-customer-type discounts
+        customerTypes.forEach((type) => {
+          const typeDiscount = override.customerDiscounts[type.id];
+          if (typeDiscount) {
+            appliedDiscounts[type.id] = {
+              value: typeDiscount.value,
+              type: typeDiscount.type || "percentage",
+              isCustom: true,
+            };
+          } else {
+            // Use customer type's default
+            appliedDiscounts[type.id] = {
+              value: type.defaultDiscount || 0,
+              type: "percentage",
+              isCustom: false,
+            };
+          }
+        });
       } else {
         // No override - use each customer type's default from Settings
         customerTypes.forEach((type) => {
@@ -143,12 +162,27 @@ router.get("/products", async (req, res) => {
 
       // Calculate main proPrice (use first customer type's discount)
       let proPrice;
-      if (override && override.value !== undefined) {
+      if (override && override.customerDiscounts) {
+        // Per-type discounts: use first type's discount
+        const firstType = customerTypes[0];
+        const firstTypeDiscount = override.customerDiscounts[firstType.id];
+        if (firstTypeDiscount) {
+          proPrice =
+            firstTypeDiscount.type === "fixed"
+              ? firstTypeDiscount.value
+              : regularPrice * (1 - firstTypeDiscount.value / 100);
+        } else {
+          proPrice =
+            regularPrice * (1 - (firstType.defaultDiscount || 0) / 100);
+        }
+      } else if (override && override.value !== undefined) {
+        // Global discount
         proPrice =
           override.type === "fixed"
             ? override.value
             : regularPrice * (1 - override.value / 100);
       } else {
+        // No override: use first customer type's default
         const firstTypeDiscount = customerTypes[0]?.defaultDiscount || 0;
         proPrice = regularPrice * (1 - firstTypeDiscount / 100);
       }
@@ -268,6 +302,15 @@ router.post("/bulk-update", async (req, res) => {
       const existingIndex = pricingRule.productOverrides.findIndex(
         (p) => p.productId === update.productId
       );
+
+      // Convert typeDiscounts to customerDiscounts if present
+      if (update.typeDiscounts) {
+        update.customerDiscounts = update.typeDiscounts;
+        delete update.typeDiscounts;
+        // Remove old value/type since we're using per-type now
+        delete update.value;
+        delete update.type;
+      }
 
       // Convert moq object to Map for customerMOQ
       if (update.moq && typeof update.moq === "object") {
