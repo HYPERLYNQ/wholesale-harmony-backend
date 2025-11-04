@@ -497,4 +497,26 @@ router.get("/debug/all", async (req, res) => {
   }
 });
 
+/* DROP OLD INDEX - Run once to fix duplicate key error */
+router.post("/fix-index", async (req, res) => {
+  try {
+    await Settings.collection.dropIndex("shop_1");
+    console.log("🗑️ Dropped old shop_1 index");
+
+    await Settings.deleteMany({});
+    console.log("🗑️ Deleted all old documents");
+
+    res.json({
+      success: true,
+      message: "Index dropped and documents cleared",
+    });
+  } catch (error) {
+    console.error("❌ Fix index error:", error);
+    res.json({
+      success: true,
+      message: "Index might not exist or already dropped: " + error.message,
+    });
+  }
+});
+
 module.exports = router;

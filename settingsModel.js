@@ -177,6 +177,12 @@ const CustomerTypeSchema = new mongoose.Schema({
 
 const SettingsSchema = new mongoose.Schema(
   {
+    shopDomain: {
+      type: String,
+      required: true,
+      unique: true,
+      index: true,
+    },
     customerTypes: { type: [CustomerTypeSchema], default: [] },
     appName: { type: String, default: "Wholesale Harmony" },
     allowedFileTypes: {
