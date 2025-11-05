@@ -1,6 +1,7 @@
 /* ========================================
    SETTINGS API ROUTES
    Handles customer type configuration and form builder settings
+   WITH ADDRESS BUNDLE SUPPORT
    ======================================== */
 
 const express = require("express");
@@ -80,7 +81,7 @@ router.put("/", async (req, res) => {
 });
 
 /* ========================================
-   GET FIELD LIBRARY
+   GET FIELD LIBRARY - WITH ADDRESS BUNDLES
    Returns all available preset fields for form builder
    ======================================== */
 router.get("/field-library", (req, res) => {
@@ -88,6 +89,62 @@ router.get("/field-library", (req, res) => {
     const fieldLibrary = {
       /* ===== CONTACT FIELDS ===== */
       contactFields: [
+        /* ===== ADDRESS BUNDLE - Home Address ===== */
+        {
+          id: "address-bundle-home",
+          type: "bundle",
+          bundleType: "address",
+          label: "Address (Home)",
+          baseId: "home",
+          category: "Contact",
+          required: false,
+          locked: false,
+          icon: "🏠",
+          helpText:
+            "Complete home address with Google Places - creates 5 fields",
+          bundleFields: [
+            {
+              suffix: "Address",
+              type: "text",
+              label: "Street Address",
+              placeholder: "123 Main Street",
+              required: true,
+              icon: "📍",
+            },
+            {
+              suffix: "City",
+              type: "text",
+              label: "City",
+              placeholder: "City",
+              required: true,
+              icon: "🏙️",
+            },
+            {
+              suffix: "State",
+              type: "text",
+              label: "State",
+              placeholder: "State",
+              required: true,
+              icon: "📍",
+            },
+            {
+              suffix: "Zip",
+              type: "text",
+              label: "ZIP Code",
+              placeholder: "ZIP Code",
+              required: true,
+              icon: "📮",
+            },
+            {
+              suffix: "Country",
+              type: "text",
+              label: "Country",
+              placeholder: "United States",
+              required: true,
+              icon: "🌍",
+            },
+          ],
+        },
         {
           id: "firstName",
           type: "text",
@@ -154,18 +211,6 @@ router.get("/field-library", (req, res) => {
           icon: "🔒",
           helpText: "Must match password",
         },
-        /* ===== PERSONAL ADDRESS FIELDS (NEW) ===== */
-        {
-          id: "homeAddress",
-          type: "text",
-          label: "Home Address",
-          placeholder: "123 Main Street",
-          category: "Contact",
-          required: false,
-          locked: false,
-          icon: "🏠",
-          helpText: "Street address with Google Places autocomplete",
-        },
         {
           id: "apartment",
           type: "text",
@@ -176,50 +221,6 @@ router.get("/field-library", (req, res) => {
           locked: false,
           icon: "🚪",
           helpText: "Apartment, suite, or unit number (optional)",
-        },
-        {
-          id: "homeCity",
-          type: "text",
-          label: "City",
-          placeholder: "New York",
-          category: "Contact",
-          required: false,
-          locked: false,
-          icon: "🏙️",
-          helpText: "Your city",
-        },
-        {
-          id: "homeState",
-          type: "text",
-          label: "State / Province",
-          placeholder: "NY",
-          category: "Contact",
-          required: false,
-          locked: false,
-          icon: "📍",
-          helpText: "State or province",
-        },
-        {
-          id: "homeZip",
-          type: "text",
-          label: "ZIP / Postal Code",
-          placeholder: "10001",
-          category: "Contact",
-          required: false,
-          locked: false,
-          icon: "📮",
-          helpText: "ZIP or postal code",
-        },
-        {
-          id: "homeCountry",
-          type: "text",
-          label: "Country",
-          placeholder: "United States",
-          category: "Contact",
-          required: false,
-          locked: false,
-          icon: "🌍",
-          helpText: "Your country",
         },
         /* ===== SOCIAL MEDIA FIELDS ===== */
         {
@@ -248,6 +249,62 @@ router.get("/field-library", (req, res) => {
 
       /* ===== BUSINESS FIELDS ===== */
       businessFields: [
+        /* ===== ADDRESS BUNDLE - Business Address ===== */
+        {
+          id: "address-bundle-business",
+          type: "bundle",
+          bundleType: "address",
+          label: "Address (Business)",
+          baseId: "business",
+          category: "Business",
+          required: false,
+          locked: false,
+          icon: "🏢",
+          helpText:
+            "Complete business address with Google Places - creates 5 fields",
+          bundleFields: [
+            {
+              suffix: "Address",
+              type: "address",
+              label: "Business Address",
+              placeholder: "123 Business St",
+              required: true,
+              icon: "📍",
+            },
+            {
+              suffix: "City",
+              type: "text",
+              label: "City",
+              placeholder: "City",
+              required: true,
+              icon: "🏙️",
+            },
+            {
+              suffix: "State",
+              type: "text",
+              label: "State",
+              placeholder: "State",
+              required: true,
+              icon: "📍",
+            },
+            {
+              suffix: "Zip",
+              type: "text",
+              label: "ZIP Code",
+              placeholder: "ZIP Code",
+              required: true,
+              icon: "📮",
+            },
+            {
+              suffix: "Country",
+              type: "text",
+              label: "Country",
+              placeholder: "United States",
+              required: true,
+              icon: "🌎",
+            },
+          ],
+        },
         {
           id: "businessName",
           type: "text",
@@ -258,61 +315,6 @@ router.get("/field-library", (req, res) => {
           locked: false,
           icon: "🏢",
           helpText: "Legal business name or DBA",
-        },
-        {
-          id: "businessAddress",
-          type: "address",
-          label: "Business Address",
-          placeholder: "Enter street address",
-          category: "Business",
-          required: true,
-          locked: false,
-          icon: "📍",
-          helpText: "Street address with Google Places autocomplete",
-        },
-        {
-          id: "businessCity",
-          type: "text",
-          label: "City",
-          placeholder: "Enter city",
-          category: "Business",
-          required: true,
-          locked: false,
-          icon: "🏙️",
-          helpText: "",
-        },
-        {
-          id: "businessState",
-          type: "text",
-          label: "State",
-          placeholder: "Enter state",
-          category: "Business",
-          required: true,
-          locked: false,
-          icon: "📍",
-          helpText: "",
-        },
-        {
-          id: "businessZip",
-          type: "text",
-          label: "ZIP Code",
-          placeholder: "Enter ZIP code",
-          category: "Business",
-          required: true,
-          locked: false,
-          icon: "📮",
-          helpText: "",
-        },
-        {
-          id: "businessCountry",
-          type: "text",
-          label: "Country",
-          placeholder: "United States",
-          category: "Business",
-          required: false,
-          locked: false,
-          icon: "🌎",
-          helpText: "",
         },
         {
           id: "taxId",
