@@ -22,7 +22,7 @@ mongoose
     console.error("❌ MongoDB connection error:", err);
   });
 
-const PricingRule = require("./pricingModel");
+const Settings = require("./settingsModel");
 
 // File compression libraries
 const sharp = require("sharp");
@@ -790,11 +790,7 @@ app.post("/api/check-duplicate", async (req, res) => {
 // Registration endpoint with file upload
 app.post(
   "/api/register",
-  upload.fields([
-    { name: "taxCertificate", maxCount: 1 },
-    { name: "licenseFile", maxCount: 1 },
-    { name: "studentProof", maxCount: 1 },
-  ]),
+  upload.any(), // ← Accept ANY file fields dynamically
   async (req, res) => {
     try {
       const {
@@ -835,57 +831,54 @@ app.post(
         agreeMarketing === "true" ? "Yes" : "No"
       }\n\n`;
 
-      if (accountType === "student") {
-        notes += `School: ${schoolName || ""}\n\n`;
+      // ========== DYNAMIC FORM DATA HANDLING ==========
+      // Process all form fields dynamically based on what was submitted
+      console.log("📋 Processing dynamic form data...");
 
-        if (req.files?.studentProof) {
-          const file = req.files.studentProof[0];
-          const fileUrl = await uploadFileToShopify(
-            file.path,
-            file.originalname
-          );
-          if (fileUrl) {
-            fileUrls.studentProof = fileUrl;
-            // File URL will be stored in metafields instead
-          }
+      // Add all submitted text fields to notes
+      Object.keys(req.body).forEach((key) => {
+        // Skip system fields
+        const skipFields = [
+          "firstName",
+          "lastName",
+          "email",
+          "phone",
+          "password",
+          "confirmPassword",
+          "accountType",
+          "agreeTerms",
+          "agreeMarketing",
+        ];
+
+        if (!skipFields.includes(key) && req.body[key]) {
+          // Format field name nicely (e.g., "businessName" -> "Business Name")
+          const fieldLabel = key.replace(/([A-Z])/g, " $1").trim();
+          const capitalizedLabel =
+            fieldLabel.charAt(0).toUpperCase() + fieldLabel.slice(1);
+          notes += `${capitalizedLabel}: ${req.body[key]}\n`;
         }
-      } else if (accountType === "esthetician" || accountType === "salon") {
-        notes += `License Number: ${licenseNumber}\n`;
-        notes += `Business: ${businessName || ""}\n`;
-        notes += `Address: ${businessStreet || ""}, ${businessCity || ""}, ${
-          businessState || ""
-        } ${businessZip || ""}\n`;
-        notes += `Tax ID: ${taxId || ""}\n\n`;
+      });
 
-        // Upload license file FIRST
-        if (req.files?.licenseFile) {
-          const file = req.files.licenseFile[0];
-          console.log(`📤 Uploading LICENSE file: ${file.originalname}`);
-          const fileUrl = await uploadFileToShopify(
-            file.path,
-            file.originalname
-          );
-          if (fileUrl) {
-            fileUrls.licenseFile = fileUrl;
-            console.log(`✅ License file URL stored: ${fileUrl}`);
-          } else {
-            console.error(`❌ License file upload FAILED`);
-          }
-        }
+      notes += "\n";
 
-        // Upload tax certificate SECOND
-        if (req.files?.taxCertificate) {
-          const file = req.files.taxCertificate[0];
-          console.log(`📤 Uploading TAX CERTIFICATE: ${file.originalname}`);
-          const fileUrl = await uploadFileToShopify(
-            file.path,
-            file.originalname
-          );
-          if (fileUrl) {
-            fileUrls.taxCertificate = fileUrl;
-            console.log(`✅ Tax certificate URL stored: ${fileUrl}`);
-          } else {
-            console.error(`❌ Tax certificate upload FAILED`);
+      // Upload all files dynamically
+      if (req.files) {
+        for (const [fieldName, filesArray] of Object.entries(req.files)) {
+          if (filesArray && filesArray.length > 0) {
+            const file = filesArray[0];
+            console.log(`📤 Uploading ${fieldName}: ${file.originalname}`);
+
+            const fileUrl = await uploadFileToShopify(
+              file.path,
+              file.originalname
+            );
+
+            if (fileUrl) {
+              fileUrls[fieldName] = fileUrl;
+              console.log(`✅ ${fieldName} uploaded: ${fileUrl}`);
+            } else {
+              console.error(`❌ ${fieldName} upload FAILED`);
+            }
           }
         }
       }
@@ -893,22 +886,41 @@ app.post(
       // Log all file URLs before creating customer
       console.log("📋 File URLs collected:", fileUrls);
 
-      // Determine customer tags based on account type
-      let tags = [];
+      // ========== DYNAMIC TAGGING BASED ON CUSTOMER TYPE CONFIG ==========
+      console.log(`🔍 Looking up customer type config for: ${accountType}`);
 
-      if (accountType === "consumer") {
-        // Consumers pay full price
-        tags = ["consumer"];
-      } else if (accountType === "esthetician") {
-        // Estheticians get 15% off (pending approval)
-        tags = ["pending-approval", "esthetician"];
-      } else if (accountType === "salon") {
-        // Salons get 20% off (pending approval)
-        tags = ["pending-approval", "salon"];
-      } else if (accountType === "student") {
-        // Students get 10% off (pending approval)
-        tags = ["pending-approval", "student"];
+      // Fetch customer type configuration from database
+      const settings = await Settings.findOne();
+      const customerTypeConfig = settings?.customerTypes?.find(
+        (type) => type.tag === accountType
+      );
+
+      if (!customerTypeConfig) {
+        console.error(`❌ Invalid account type: ${accountType}`);
+        throw new Error(`Invalid account type: ${accountType}`);
       }
+
+      console.log(`✅ Found config:`, {
+        name: customerTypeConfig.name,
+        requiresApproval: customerTypeConfig.requiresApproval,
+        defaultDiscount: customerTypeConfig.defaultDiscount,
+      });
+
+      // Build tags dynamically
+      let tags = [accountType]; // Always include the account type tag
+
+      // Add approval status tag based on configuration
+      if (customerTypeConfig.requiresApproval) {
+        tags.push("pending-approval");
+        console.log(
+          `⏳ Customer requires approval - adding "pending-approval" tag`
+        );
+      } else {
+        tags.push("pro-pricing");
+        console.log(`✅ Customer auto-approved - adding "pro-pricing" tag`);
+      }
+
+      console.log(`🏷️ Final tags for ${accountType}:`, tags);
 
       // Create customer in Shopify
       const customerData = {
@@ -952,9 +964,10 @@ app.post(
 
       // Send emails AFTER customer is created
       try {
-        // Send different emails based on account type
-        if (accountType !== "consumer") {
-          // PROFESSIONALS: Send pending approval email
+        // Send different emails based on requiresApproval flag
+        if (customerTypeConfig.requiresApproval) {
+          // REQUIRES APPROVAL: Send pending approval email
+
           await sendEmail({
             to: email,
             subject: "✋ Registration Received - Pending Approval",
@@ -965,8 +978,10 @@ app.post(
           });
 
           console.log(
-            `📧 Pending approval email sent to professional: ${email}`
+            `📧 Pending approval email sent to ${accountType}: ${email}`
           );
+
+          // Notify store owner of new registration requiring approval
 
           // Notify store owner of new professional registration
           await sendEmail({
@@ -990,6 +1005,7 @@ app.post(
 
           console.log(`📧 Owner notification sent for new ${accountType}`);
         } else {
+          // AUTO-APPROVED: Send welcome email (immediate access)
           // CONSUMERS: Send welcome email (immediate access)
           await sendEmail({
             to: email,
@@ -1001,7 +1017,7 @@ app.post(
             ),
           });
 
-          console.log(`📧 Welcome email sent to consumer: ${email}`);
+          console.log(`📧 Welcome email sent to ${accountType}: ${email}`);
         }
 
         console.log("✅ Registration emails sent successfully");
@@ -1016,54 +1032,40 @@ app.post(
       // Add metafields for file URLs
       // customerId already defined above
 
+      // ========== DYNAMIC METAFIELD CREATION ==========
       if (Object.keys(fileUrls).length > 0) {
         console.log(
-          `\n🔧 Starting metafield creation for ${
+          `\n🔧 Starting dynamic metafield creation for ${
             Object.keys(fileUrls).length
           } files...`
         );
 
         const metafieldPromises = [];
 
-        if (fileUrls.studentProof) {
-          console.log(`\n📝 Preparing student_proof_file metafield...`);
-          const metafield = {
-            namespace: "custom",
-            key: "student_proof_file",
-            value: fileUrls.studentProof,
-            type: "url",
-          };
-          console.log(`   URL: ${metafield.value}`);
-          metafieldPromises.push(
-            addMetafieldWithLogging(customerId, metafield, "student_proof_file")
-          );
-        }
+        // Create metafield for each uploaded file dynamically
+        for (const [fieldName, fileUrl] of Object.entries(fileUrls)) {
+          console.log(`\n📝 Preparing metafield for: ${fieldName}`);
 
-        if (fileUrls.licenseFile) {
-          console.log(`\n📝 Preparing license_file metafield...`);
-          const metafield = {
-            namespace: "custom",
-            key: "license_file",
-            value: fileUrls.licenseFile,
-            type: "url",
-          };
-          console.log(`   URL: ${metafield.value}`);
-          metafieldPromises.push(
-            addMetafieldWithLogging(customerId, metafield, "license_file")
-          );
-        }
+          // Convert camelCase to snake_case for metafield key
+          // Example: "studentProof" -> "student_proof_file"
+          const metafieldKey =
+            fieldName
+              .replace(/([A-Z])/g, "_$1")
+              .toLowerCase()
+              .replace(/^_/, "") + "_file";
 
-        if (fileUrls.taxCertificate) {
-          console.log(`\n📝 Preparing tax_certificate_file metafield...`);
           const metafield = {
             namespace: "custom",
-            key: "tax_certificate",
-            value: fileUrls.taxCertificate,
+            key: metafieldKey,
+            value: fileUrl,
             type: "url",
           };
-          console.log(`   URL: ${metafield.value}`);
+
+          console.log(`   Key: ${metafieldKey}`);
+          console.log(`   URL: ${fileUrl}`);
+
           metafieldPromises.push(
-            addMetafieldWithLogging(customerId, metafield, "tax_certificate")
+            addMetafieldWithLogging(customerId, metafield, fieldName)
           );
         }
 
