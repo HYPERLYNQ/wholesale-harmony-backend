@@ -865,19 +865,18 @@ app.post(
       if (req.files && req.files.length > 0) {
         for (const file of req.files) {
           const fieldName = file.fieldname;
-            console.log(`📤 Uploading ${fieldName}: ${file.originalname}`);
+          console.log(`📤 Uploading ${fieldName}: ${file.originalname}`);
 
-            const fileUrl = await uploadFileToShopify(
-              file.path,
-              file.originalname
-            );
+          const fileUrl = await uploadFileToShopify(
+            file.path,
+            file.originalname
+          );
 
-            if (fileUrl) {
-              fileUrls[fieldName] = fileUrl;
-              console.log(`✅ ${fieldName} uploaded: ${fileUrl}`);
-            } else {
-              console.error(`❌ ${fieldName} upload FAILED`);
-            }
+          if (fileUrl) {
+            fileUrls[fieldName] = fileUrl;
+            console.log(`✅ ${fieldName} uploaded: ${fileUrl}`);
+          } else {
+            console.error(`❌ ${fieldName} upload FAILED`);
           }
         }
       }
@@ -1087,11 +1086,17 @@ app.post(
       await invalidateCustomerCache(email, phone);
 
       // Clean up uploaded files (optional - or keep them for admin review)
-      if (req.files) {
-        Object.values(req.files).forEach((fileArray) => {
-          fileArray.forEach((file) => {
+      // Clean up uploaded files
+      if (req.files && req.files.length > 0) {
+        req.files.forEach((file) => {
+          try {
             fs.unlinkSync(file.path);
-          });
+          } catch (err) {
+            console.error(
+              `Failed to delete temp file ${file.path}:`,
+              err.message
+            );
+          }
         });
       }
 
