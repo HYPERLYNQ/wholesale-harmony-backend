@@ -2179,7 +2179,12 @@ app.get("/api/admin/stats", async (req, res) => {
   try {
     console.log("📊 Fetching ALL customers for stats...");
 
-    // ✅ FIX #2: Fetch ALL customers, not just 250
+    // Fetch customer types from Settings
+    const settings = await Settings.findOne();
+    const customerTypes = settings?.customerTypes || [];
+    console.log(`📋 Found ${customerTypes.length} customer types in settings`);
+
+    // ✅ Fetch ALL customers (pagination code stays same)
     let allCustomers = [];
     let hasMore = true;
     let since_id = null;
@@ -2213,7 +2218,7 @@ app.get("/api/admin/stats", async (req, res) => {
 
     console.log(`✅ Total customers fetched: ${allCustomers.length}`);
 
-    // ✅ FIX #3: Use .split(", ").includes() for accurate tag matching
+    // ✅ Base stats (status-based)
     const stats = {
       total: allCustomers.length,
       pending: allCustomers.filter((c) =>
@@ -2228,34 +2233,18 @@ app.get("/api/admin/stats", async (req, res) => {
       archived: allCustomers.filter((c) =>
         c.tags.split(", ").includes("archived")
       ).length,
-      consumers: allCustomers.filter((c) =>
-        c.tags.split(", ").includes("consumer")
-      ).length,
-      estheticians: allCustomers.filter((c) => {
-        const tags = c.tags.split(", ");
-        return (
-          tags.some((tag) => tag.includes("esthetician")) &&
-          tags.includes("pro-pricing")
-        );
-      }).length,
-      salons: allCustomers.filter((c) => {
-        const tags = c.tags.split(", ");
-        return (
-          tags.some((tag) => tag.includes("salon")) &&
-          tags.includes("pro-pricing")
-        );
-      }).length,
-      students: allCustomers.filter((c) => {
-        const tags = c.tags.split(", ");
-        return (
-          tags.some((tag) => tag.includes("student")) &&
-          tags.includes("pro-pricing")
-        );
-      }).length,
     };
 
+    // ✅ DYNAMIC customer type counts
+    customerTypes.forEach((type) => {
+      stats[type.tag] = allCustomers.filter((c) =>
+        c.tags.split(", ").includes(type.tag)
+      ).length;
+      console.log(`   ${type.tag}: ${stats[type.tag]} customers`);
+    });
+
     console.log("📊 Stats calculated:", stats);
-    res.json({ success: true, stats });
+    res.json({ success: true, stats, customerTypes });
   } catch (error) {
     console.error("❌ Error fetching stats:", error.message);
     res.status(500).json({ error: "Failed to fetch stats" });
