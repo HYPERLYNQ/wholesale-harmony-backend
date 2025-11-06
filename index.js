@@ -862,10 +862,9 @@ app.post(
       notes += "\n";
 
       // Upload all files dynamically
-      if (req.files) {
-        for (const [fieldName, filesArray] of Object.entries(req.files)) {
-          if (filesArray && filesArray.length > 0) {
-            const file = filesArray[0];
+      if (req.files && req.files.length > 0) {
+        for (const file of req.files) {
+          const fieldName = file.fieldname;
             console.log(`📤 Uploading ${fieldName}: ${file.originalname}`);
 
             const fileUrl = await uploadFileToShopify(
