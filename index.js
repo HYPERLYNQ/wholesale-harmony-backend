@@ -1283,6 +1283,12 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
     console.log(
       `🔄 Fetching customers from Shopify (page ${page}, filter ${filter})`
     );
+    // ✅ Load customer types from Settings for dynamic account type detection
+    const settings = await Settings.findOne();
+    const customerTypes = settings?.customerTypes || [];
+    console.log(
+      `📋 Found ${customerTypes.length} customer types for detection`
+    );
 
     // ========== ENHANCED FILTER LOGIC WITH "ALL" SUPPORT ==========
     let tagFilter;
@@ -1461,13 +1467,11 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
           )?.value;
 
           const tags = customer.tags.split(", ").filter((tag) => tag !== "");
-          let accountType = "consumer";
-          if (tags.some((tag) => tag.includes("esthetician")))
-            accountType = "esthetician";
-          else if (tags.some((tag) => tag.includes("salon")))
-            accountType = "salon";
-          else if (tags.some((tag) => tag.includes("student")))
-            accountType = "student";
+          // ✅ DYNAMIC account type detection
+          const customerTypeConfig = customerTypes.find((type) =>
+            tags.includes(type.tag)
+          );
+          const accountType = customerTypeConfig?.tag || "unknown";
 
           customersWithDetails.push({
             id: customer.id,
@@ -1491,13 +1495,11 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
 
         paginatedCustomers.forEach((customer) => {
           const tags = customer.tags.split(", ").filter((tag) => tag !== "");
-          let accountType = "consumer";
-          if (tags.some((tag) => tag.includes("esthetician")))
-            accountType = "esthetician";
-          else if (tags.some((tag) => tag.includes("salon")))
-            accountType = "salon";
-          else if (tags.some((tag) => tag.includes("student")))
-            accountType = "student";
+          // ✅ DYNAMIC account type detection
+          const customerTypeConfig = customerTypes.find((type) =>
+            tags.includes(type.tag)
+          );
+          const accountType = customerTypeConfig?.tag || "unknown";
 
           customersWithDetails.push({
             id: customer.id,
