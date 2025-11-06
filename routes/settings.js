@@ -189,28 +189,7 @@ router.get("/field-library", (req, res) => {
           icon: "📱",
           helpText: "International phone number with country code",
         },
-        {
-          id: "password",
-          type: "password",
-          label: "Password",
-          placeholder: "Enter password",
-          category: "Contact",
-          required: true,
-          locked: true, // Can't be removed - required for Shopify
-          icon: "🔒",
-          helpText: "Minimum 6 characters",
-        },
-        {
-          id: "confirmPassword",
-          type: "password",
-          label: "Confirm Password",
-          placeholder: "Re-enter password",
-          category: "Contact",
-          required: true,
-          locked: true, // Can't be removed - required for validation
-          icon: "🔒",
-          helpText: "Must match password",
-        },
+
         {
           id: "apartment",
           type: "text",
