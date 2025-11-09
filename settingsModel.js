@@ -156,6 +156,11 @@ const CustomerTypeSchema = new mongoose.Schema({
     default: "👤",
   }, // Emoji icon for this customer type
 
+  color: {
+    type: String,
+    default: "#A0AEC0",
+  }, // ← ADD THIS ENTIRE BLOCK
+
   description: {
     type: String,
     default: "",
