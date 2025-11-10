@@ -167,7 +167,6 @@ app.use(express.json());
 app.use(cors());
 app.use(express.urlencoded({ extended: true }));
 
-
 // ========== PRICING ROUTES ==========
 const pricingRoutes = require("./routes/pricing");
 const settingsRoutes = require("./routes/settings");
