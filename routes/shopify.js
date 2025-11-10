@@ -5,7 +5,7 @@ const axios = require("axios");
 const SHOPIFY_SHOP = `${process.env.SHOPIFY_SHOP_NAME}.myshopify.com`;
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
-// Import CustomerType model (adjust path if needed)
+// Import Settings model
 const Settings = require("../settingsModel");
 
 // GET /api/shopify/customers - Fetch all customers with their assigned types
@@ -41,17 +41,25 @@ router.get("/customers", async (req, res) => {
 
     console.log(`✅ Fetched ${allCustomers.length} total customers`);
 
-    // Get all customer types from Settings
-    const settings = await Settings.findOne();
+    // Get all customer types from Settings - WITH SHOP DOMAIN
+    const settings = await Settings.findOne({ shopDomain: SHOPIFY_SHOP });
     const customerTypes = settings?.customerTypes || [];
+
+    console.log(`✅ Found ${customerTypes.length} customer types`);
+    customerTypes.forEach((t) =>
+      console.log(`   - ${t.typeName} (tag: ${t.tagName})`)
+    );
 
     // Match customers with their assigned types based on tags
     const customersWithTypes = allCustomers.map((customer) => {
-      const customerTags = customer.tags.split(", ");
+      // Handle null tags and make case-insensitive
+      const customerTags = customer.tags
+        ? customer.tags.split(", ").map((tag) => tag.toLowerCase())
+        : [];
 
-      // Find which customer type tag this customer has
+      // Find which customer type tag this customer has (case-insensitive)
       const assignedType = customerTypes.find((type) =>
-        customerTags.includes(type.tagName)
+        customerTags.includes(type.tagName.toLowerCase())
       );
 
       return {
@@ -60,13 +68,13 @@ router.get("/customers", async (req, res) => {
         lastName: customer.last_name,
         email: customer.email,
         phone: customer.phone,
-        tags: customerTags,
+        tags: customer.tags ? customer.tags.split(", ") : [],
         createdAt: customer.created_at,
         numberOfOrders: customer.orders_count,
         amountSpent: customer.total_spent,
         customerType: assignedType
           ? {
-              id: assignedType._id,
+              id: assignedType._id.toString(),
               name: assignedType.typeName,
               tag: assignedType.tagName,
             }
@@ -78,7 +86,7 @@ router.get("/customers", async (req, res) => {
       success: true,
       customers: customersWithTypes,
       customerTypes: customerTypes.map((t) => ({
-        id: t._id,
+        id: t._id.toString(),
         name: t.typeName,
         tag: t.tagName,
       })),
@@ -98,8 +106,8 @@ router.post("/customers/assign-type", async (req, res) => {
       `🏷️ Assigning type ${customerTypeId} to customer ${customerId}`
     );
 
-    // Get customer type from Settings
-    const settings = await Settings.findOne();
+    // Get customer type from Settings - WITH SHOP DOMAIN
+    const settings = await Settings.findOne({ shopDomain: SHOPIFY_SHOP });
     const customerType = settings?.customerTypes?.find(
       (t) => t._id.toString() === customerTypeId
     );
@@ -120,7 +128,9 @@ router.post("/customers/assign-type", async (req, res) => {
     );
 
     const customer = customerResponse.data.customer;
-    const currentTags = customer.tags.split(", ").filter((t) => t);
+    const currentTags = customer.tags
+      ? customer.tags.split(", ").filter((t) => t)
+      : [];
 
     // Remove all existing customer type tags
     const allCustomerTypes = settings?.customerTypes || [];
@@ -175,8 +185,8 @@ router.post("/customers/bulk-assign", async (req, res) => {
       `🏷️ Bulk assigning type ${customerTypeId} to ${customerIds.length} customers`
     );
 
-    // Get customer type from Settings
-    const settings = await Settings.findOne();
+    // Get customer type from Settings - WITH SHOP DOMAIN
+    const settings = await Settings.findOne({ shopDomain: SHOPIFY_SHOP });
     const customerType = settings?.customerTypes?.find(
       (t) => t._id.toString() === customerTypeId
     );
@@ -201,7 +211,9 @@ router.post("/customers/bulk-assign", async (req, res) => {
         );
 
         const customer = customerResponse.data.customer;
-        const currentTags = customer.tags.split(", ").filter((t) => t);
+        const currentTags = customer.tags
+          ? customer.tags.split(", ").filter((t) => t)
+          : [];
 
         // Remove existing type tags, add new one
         const allCustomerTypes = settings?.customerTypes || [];
