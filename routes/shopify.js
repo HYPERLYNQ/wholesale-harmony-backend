@@ -44,9 +44,7 @@ router.get("/customers", async (req, res) => {
 
     console.log(`✅ Found ${customerTypes.length} customer types`);
     customerTypes.forEach((t) => {
-      console.log(
-        `   - ${t.typeName || "undefined"} (tag: ${t.tagName || "undefined"})`
-      );
+      console.log(`   - ${t.name} (tag: ${t.tag})`);
     });
 
     const customersWithTypes = allCustomers.map((customer) => {
@@ -55,8 +53,8 @@ router.get("/customers", async (req, res) => {
         : [];
 
       const assignedType = customerTypes.find((type) => {
-        if (!type.tagName) return false;
-        return customerTags.includes(type.tagName.toLowerCase());
+        if (!type.tag) return false;
+        return customerTags.includes(type.tag.toLowerCase());
       });
 
       return {
@@ -72,8 +70,8 @@ router.get("/customers", async (req, res) => {
         customerType: assignedType
           ? {
               id: assignedType._id.toString(),
-              name: assignedType.typeName,
-              tag: assignedType.tagName,
+              name: assignedType.name,
+              tag: assignedType.tag,
             }
           : null,
       };
@@ -84,8 +82,8 @@ router.get("/customers", async (req, res) => {
       customers: customersWithTypes,
       customerTypes: customerTypes.map((t) => ({
         id: t._id.toString(),
-        name: t.typeName,
-        tag: t.tagName,
+        name: t.name,
+        tag: t.tag,
       })),
     });
   } catch (error) {
@@ -129,13 +127,13 @@ router.post("/customers/assign-type", async (req, res) => {
 
     const allCustomerTypes = settings?.customerTypes || [];
     const customerTypeTags = allCustomerTypes
-      .map((t) => t.tagName)
+      .map((t) => t.tag)
       .filter((t) => t);
     const nonTypeTags = currentTags.filter(
       (tag) => !customerTypeTags.includes(tag)
     );
 
-    const newTags = [...nonTypeTags, customerType.tagName];
+    const newTags = [...nonTypeTags, customerType.tag];
 
     await axios.put(
       `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
@@ -153,9 +151,7 @@ router.post("/customers/assign-type", async (req, res) => {
       }
     );
 
-    console.log(
-      `✅ Customer ${customerId} tagged with: ${customerType.tagName}`
-    );
+    console.log(`✅ Customer ${customerId} tagged with: ${customerType.tag}`);
 
     res.json({
       success: true,
@@ -209,12 +205,12 @@ router.post("/customers/bulk-assign", async (req, res) => {
 
         const allCustomerTypes = settings?.customerTypes || [];
         const customerTypeTags = allCustomerTypes
-          .map((t) => t.tagName)
+          .map((t) => t.tag)
           .filter((t) => t);
         const nonTypeTags = currentTags.filter(
           (tag) => !customerTypeTags.includes(tag)
         );
-        const newTags = [...nonTypeTags, customerType.tagName];
+        const newTags = [...nonTypeTags, customerType.tag];
 
         await axios.put(
           `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
