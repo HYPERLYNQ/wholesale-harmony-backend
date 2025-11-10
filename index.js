@@ -2180,6 +2180,66 @@ app.post("/api/admin/clear-cache", async (req, res) => {
   }
 });
 
+// ========================================
+// ASSIGN CUSTOMER TYPE
+// ========================================
+app.post("/api/admin/assign-customer-type", async (req, res) => {
+  try {
+    const { customerId, customerTypeId } = req.body;
+
+    const settings = await Settings.findOne({ shopDomain: SHOPIFY_SHOP });
+    const customerType = settings?.customerTypes?.find(
+      (t) => t.id === customerTypeId
+    );
+
+    if (!customerType) {
+      return res
+        .status(400)
+        .json({ success: false, error: "Customer type not found" });
+    }
+
+    const customerResponse = await axios.get(
+      `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
+      {
+        headers: {
+          "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    const customer = customerResponse.data.customer;
+    const currentTags = customer.tags ? customer.tags.split(", ") : [];
+
+    const allTypeTags = settings.customerTypes.map((t) => t.tag);
+    const filteredTags = currentTags.filter(
+      (tag) => !allTypeTags.includes(tag)
+    );
+    const newTags = [...filteredTags, customerType.tag].join(", ");
+
+    await axios.put(
+      `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
+      {
+        customer: {
+          id: customerId,
+          tags: newTags,
+        },
+      },
+      {
+        headers: {
+          "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error("Error assigning customer type:", error);
+    res.status(500).json({ success: false, error: error.message });
+  }
+});
+
 // ========== GET ADMIN STATS ==========
 app.get("/api/admin/stats", async (req, res) => {
   try {
