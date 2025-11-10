@@ -84,6 +84,7 @@ router.get("/customers", async (req, res) => {
         id: t._id.toString(),
         name: t.name,
         tag: t.tag,
+        color: t.color || "#a78bfa", // ← ADD COLOR
       })),
     });
   } catch (error) {
