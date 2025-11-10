@@ -223,7 +223,7 @@ router.post("/customers/bulk-assign", async (req, res) => {
           },
           {
             headers: {
-              "X-Shopify-Access-TOKEN": SHOPIFY_ACCESS_TOKEN,
+              "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
               "Content-Type": "application/json",
             },
           }
@@ -424,6 +424,129 @@ router.post("/customers/bulk-generate-codes", async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Bulk code generation error:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// GET /api/shopify/discount-codes - Fetch all discount codes
+router.get("/discount-codes", async (req, res) => {
+  try {
+    console.log("📋 Fetching all discount codes...");
+
+    // Fetch all price rules
+    let allPriceRules = [];
+    let hasMore = true;
+    let since_id = null;
+
+    while (hasMore) {
+      let url = `https://${SHOPIFY_SHOP}/admin/api/2024-10/price_rules.json?limit=250`;
+      if (since_id) url += `&since_id=${since_id}`;
+
+      const response = await axios.get(url, {
+        headers: {
+          "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+          "Content-Type": "application/json",
+        },
+      });
+
+      const priceRules = response.data.price_rules;
+      allPriceRules = allPriceRules.concat(priceRules);
+
+      if (priceRules.length === 250) {
+        since_id = priceRules[priceRules.length - 1].id;
+      } else {
+        hasMore = false;
+      }
+    }
+
+    console.log(`✅ Fetched ${allPriceRules.length} price rules`);
+
+    // Fetch discount codes for each price rule (only for custom codes)
+    const customPriceRules = allPriceRules.filter((pr) =>
+      pr.title.includes("Custom discount for")
+    );
+
+    const codesWithDetails = [];
+
+    for (const priceRule of customPriceRules) {
+      try {
+        const codesResponse = await axios.get(
+          `https://${SHOPIFY_SHOP}/admin/api/2024-10/price_rules/${priceRule.id}/discount_codes.json`,
+          {
+            headers: {
+              "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        const codes = codesResponse.data.discount_codes;
+
+        for (const code of codes) {
+          // Extract customer email from title
+          const emailMatch = priceRule.title.match(/Custom discount for (.+)/);
+          const customerEmail = emailMatch ? emailMatch[1] : "Unknown";
+
+          codesWithDetails.push({
+            id: code.id,
+            code: code.code,
+            priceRuleId: priceRule.id,
+            customerEmail: customerEmail,
+            customerId: priceRule.prerequisite_customer_ids?.[0] || null,
+            discountType: priceRule.value_type,
+            discountValue: Math.abs(priceRule.value),
+            usageCount: code.usage_count,
+            usageLimit: priceRule.usage_limit,
+            startsAt: priceRule.starts_at,
+            endsAt: priceRule.ends_at,
+            createdAt: code.created_at,
+          });
+        }
+      } catch (error) {
+        console.error(
+          `Error fetching codes for price rule ${priceRule.id}:`,
+          error.message
+        );
+      }
+    }
+
+    console.log(`✅ Found ${codesWithDetails.length} custom discount codes`);
+
+    res.json({
+      success: true,
+      codes: codesWithDetails,
+    });
+  } catch (error) {
+    console.error("❌ Error fetching discount codes:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/shopify/discount-codes/:priceRuleId - Delete discount code
+router.delete("/discount-codes/:priceRuleId", async (req, res) => {
+  try {
+    const { priceRuleId } = req.params;
+
+    console.log(`🗑️ Deleting price rule ${priceRuleId}`);
+
+    await axios.delete(
+      `https://${SHOPIFY_SHOP}/admin/api/2024-10/price_rules/${priceRuleId}.json`,
+      {
+        headers: {
+          "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    console.log(`✅ Deleted price rule ${priceRuleId}`);
+
+    res.json({
+      success: true,
+      message: "Discount code deleted successfully",
+    });
+  } catch (error) {
+    console.error("❌ Error deleting discount code:", error.message);
     res.status(500).json({ error: error.message });
   }
 });
