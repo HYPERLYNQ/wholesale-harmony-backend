@@ -1,7 +1,8 @@
 /* ========================================
    SETTINGS API ROUTES
    Handles customer type configuration and form builder settings
-   WITH ADDRESS BUNDLE SUPPORT
+   WITH ADDRESS BUNDLE SUPPORT (6 FIELDS INCLUDING APT/UNIT)
+   PATCHED: November 9, 2025
    ======================================== */
 
 const express = require("express");
@@ -81,15 +82,16 @@ router.put("/", async (req, res) => {
 });
 
 /* ========================================
-   GET FIELD LIBRARY - WITH ADDRESS BUNDLES
+   GET FIELD LIBRARY - WITH ADDRESS BUNDLES (6 FIELDS)
    Returns all available preset fields for form builder
+   🔧 PATCHED: Added Unit field to both address bundles
    ======================================== */
 router.get("/field-library", (req, res) => {
   try {
     const fieldLibrary = {
       /* ===== CONTACT FIELDS ===== */
       contactFields: [
-        /* ===== ADDRESS BUNDLE - Home Address ===== */
+        /* ===== ADDRESS BUNDLE - Home Address (6 FIELDS) ===== */
         {
           id: "address-bundle-home",
           type: "bundle",
@@ -101,7 +103,7 @@ router.get("/field-library", (req, res) => {
           locked: false,
           icon: "🏠",
           helpText:
-            "Complete home address with Google Places - creates 5 fields",
+            "Complete home address with Google Places - creates 6 fields", // 🔧 UPDATED: 5→6
           bundleFields: [
             {
               suffix: "Address",
@@ -110,6 +112,17 @@ router.get("/field-library", (req, res) => {
               placeholder: "123 Main Street",
               required: true,
               icon: "📍",
+              helpText: "Start typing to search with Google Places",
+            },
+            // 🔧 NEW FIELD ADDED HERE (index 1)
+            {
+              suffix: "Unit",
+              type: "text",
+              label: "Apt/Suite/Unit",
+              placeholder: "Apt 4B, Suite 200, etc.",
+              required: false,
+              icon: "🚪",
+              helpText: "Optional apartment, suite, or unit number",
             },
             {
               suffix: "City",
@@ -122,15 +135,15 @@ router.get("/field-library", (req, res) => {
             {
               suffix: "State",
               type: "text",
-              label: "State",
+              label: "State/Province",
               placeholder: "State",
               required: true,
-              icon: "📍",
+              icon: "🗺️",
             },
             {
               suffix: "Zip",
               type: "text",
-              label: "ZIP Code",
+              label: "ZIP/Postal Code",
               placeholder: "ZIP Code",
               required: true,
               icon: "📮",
@@ -189,18 +202,14 @@ router.get("/field-library", (req, res) => {
           icon: "📱",
           helpText: "International phone number with country code",
         },
+        // 🔧 REMOVED: Standalone apartment field (now integrated into bundles)
+        // {
+        //   id: "apartment",
+        //   type: "text",
+        //   label: "Apartment / Unit",
+        //   ...
+        // },
 
-        {
-          id: "apartment",
-          type: "text",
-          label: "Apartment / Unit",
-          placeholder: "Apt 4B",
-          category: "Contact",
-          required: false,
-          locked: false,
-          icon: "🚪",
-          helpText: "Apartment, suite, or unit number (optional)",
-        },
         /* ===== SOCIAL MEDIA FIELDS ===== */
         {
           id: "instagram",
@@ -228,7 +237,7 @@ router.get("/field-library", (req, res) => {
 
       /* ===== BUSINESS FIELDS ===== */
       businessFields: [
-        /* ===== ADDRESS BUNDLE - Business Address ===== */
+        /* ===== ADDRESS BUNDLE - Business Address (6 FIELDS) ===== */
         {
           id: "address-bundle-business",
           type: "bundle",
@@ -240,7 +249,7 @@ router.get("/field-library", (req, res) => {
           locked: false,
           icon: "🏢",
           helpText:
-            "Complete business address with Google Places - creates 5 fields",
+            "Complete business address with Google Places - creates 6 fields", // 🔧 UPDATED: 5→6
           bundleFields: [
             {
               suffix: "Address",
@@ -249,6 +258,17 @@ router.get("/field-library", (req, res) => {
               placeholder: "123 Business St",
               required: true,
               icon: "📍",
+              helpText: "Start typing to search with Google Places",
+            },
+            // 🔧 NEW FIELD ADDED HERE (index 1)
+            {
+              suffix: "Unit",
+              type: "text",
+              label: "Apt/Suite/Unit",
+              placeholder: "Suite 200, Floor 3, etc.",
+              required: false,
+              icon: "🚪",
+              helpText: "Optional suite, floor, or unit number",
             },
             {
               suffix: "City",
@@ -261,15 +281,15 @@ router.get("/field-library", (req, res) => {
             {
               suffix: "State",
               type: "text",
-              label: "State",
+              label: "State/Province",
               placeholder: "State",
               required: true,
-              icon: "📍",
+              icon: "🗺️",
             },
             {
               suffix: "Zip",
               type: "text",
-              label: "ZIP Code",
+              label: "ZIP/Postal Code",
               placeholder: "ZIP Code",
               required: true,
               icon: "📮",
