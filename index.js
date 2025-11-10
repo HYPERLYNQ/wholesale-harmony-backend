@@ -167,11 +167,15 @@ app.use(express.json());
 app.use(cors());
 app.use(express.urlencoded({ extended: true }));
 
+
 // ========== PRICING ROUTES ==========
 const pricingRoutes = require("./routes/pricing");
 const settingsRoutes = require("./routes/settings");
+const shopifyRoutes = require("./routes/shopify");
+
 app.use("/api/pricing", pricingRoutes);
 app.use("/api/settings", settingsRoutes);
+app.use("/api/shopify", shopifyRoutes);
 
 // Test route
 app.get("/", (req, res) => {
