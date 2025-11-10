@@ -84,7 +84,7 @@ router.get("/customers", async (req, res) => {
         id: t._id.toString(),
         name: t.name,
         tag: t.tag,
-        color: t.color || "#a78bfa", // ← ADD COLOR
+        color: t.color || "#a78bfa",
       })),
     });
   } catch (error) {
@@ -223,7 +223,7 @@ router.post("/customers/bulk-assign", async (req, res) => {
           },
           {
             headers: {
-              "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+              "X-Shopify-Access-TOKEN": SHOPIFY_ACCESS_TOKEN,
               "Content-Type": "application/json",
             },
           }
@@ -245,6 +245,185 @@ router.post("/customers/bulk-assign", async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Bulk assign error:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/shopify/customers/generate-code - Single customer discount code
+router.post("/customers/generate-code", async (req, res) => {
+  try {
+    const {
+      customerId,
+      customerEmail,
+      discountType,
+      discountValue,
+      expiresAt,
+      usageLimit,
+    } = req.body;
+
+    console.log(`🎫 Generating code for ${customerEmail}`);
+
+    // Create Price Rule
+    const priceRuleData = {
+      price_rule: {
+        title: `Custom discount for ${customerEmail}`,
+        target_type: "line_item",
+        target_selection: "all",
+        allocation_method: "across",
+        value_type: discountType,
+        value:
+          discountType === "percentage"
+            ? `-${discountValue}`
+            : `-${discountValue}`,
+        customer_selection: "prerequisite",
+        prerequisite_customer_ids: [customerId],
+        starts_at: new Date().toISOString(),
+        ...(expiresAt && { ends_at: new Date(expiresAt).toISOString() }),
+        ...(usageLimit && { usage_limit: parseInt(usageLimit) }),
+      },
+    };
+
+    const priceRuleResponse = await axios.post(
+      `https://${SHOPIFY_SHOP}/admin/api/2024-10/price_rules.json`,
+      priceRuleData,
+      {
+        headers: {
+          "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    const priceRuleId = priceRuleResponse.data.price_rule.id;
+
+    // Create Discount Code
+    const code = `CUSTOM-${customerEmail
+      .split("@")[0]
+      .toUpperCase()}-${Date.now().toString().slice(-6)}`;
+
+    await axios.post(
+      `https://${SHOPIFY_SHOP}/admin/api/2024-10/price_rules/${priceRuleId}/discount_codes.json`,
+      {
+        discount_code: { code },
+      },
+      {
+        headers: {
+          "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    console.log(`✅ Generated code: ${code}`);
+
+    res.json({
+      success: true,
+      code,
+      customerEmail,
+    });
+  } catch (error) {
+    console.error(
+      "❌ Error generating code:",
+      error.response?.data || error.message
+    );
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/shopify/customers/bulk-generate-codes - Batch discount codes
+router.post("/customers/bulk-generate-codes", async (req, res) => {
+  try {
+    const { customers, discountType, discountValue, expiresAt, usageLimit } =
+      req.body;
+
+    console.log(`🎫 Generating codes for ${customers.length} customers`);
+
+    const results = { success: [], errors: [] };
+
+    for (const customer of customers) {
+      try {
+        // Create Price Rule
+        const priceRuleData = {
+          price_rule: {
+            title: `Custom discount for ${customer.email}`,
+            target_type: "line_item",
+            target_selection: "all",
+            allocation_method: "across",
+            value_type: discountType,
+            value:
+              discountType === "percentage"
+                ? `-${discountValue}`
+                : `-${discountValue}`,
+            customer_selection: "prerequisite",
+            prerequisite_customer_ids: [customer.id],
+            starts_at: new Date().toISOString(),
+            ...(expiresAt && { ends_at: new Date(expiresAt).toISOString() }),
+            ...(usageLimit && { usage_limit: parseInt(usageLimit) }),
+          },
+        };
+
+        const priceRuleResponse = await axios.post(
+          `https://${SHOPIFY_SHOP}/admin/api/2024-10/price_rules.json`,
+          priceRuleData,
+          {
+            headers: {
+              "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        const priceRuleId = priceRuleResponse.data.price_rule.id;
+
+        // Create Discount Code
+        const code = `CUSTOM-${customer.email
+          .split("@")[0]
+          .toUpperCase()}-${Date.now().toString().slice(-6)}`;
+
+        await axios.post(
+          `https://${SHOPIFY_SHOP}/admin/api/2024-10/price_rules/${priceRuleId}/discount_codes.json`,
+          {
+            discount_code: { code },
+          },
+          {
+            headers: {
+              "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+              "Content-Type": "application/json",
+            },
+          }
+        );
+
+        results.success.push({
+          customerId: customer.id,
+          customerEmail: customer.email,
+          code,
+        });
+
+        console.log(`✅ Generated code for ${customer.email}: ${code}`);
+
+        // Small delay to avoid rate limits
+        await new Promise((resolve) => setTimeout(resolve, 500));
+      } catch (error) {
+        results.errors.push({
+          customerId: customer.id,
+          customerEmail: customer.email,
+          error: error.message,
+        });
+      }
+    }
+
+    console.log(
+      `✅ Bulk generation complete: ${results.success.length}/${customers.length} successful`
+    );
+
+    res.json({
+      success: true,
+      generated: results.success,
+      errors: results.errors,
+      total: customers.length,
+    });
+  } catch (error) {
+    console.error("❌ Bulk code generation error:", error.message);
     res.status(500).json({ error: error.message });
   }
 });
