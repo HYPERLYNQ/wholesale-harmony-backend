@@ -255,48 +255,32 @@ router.get("/products", async (req, res) => {
       // ===== EXTRACT SKU =====
       const sku = product.variants?.edges[0]?.node?.sku || null;
 
-      // ===== RETURN PRODUCT DATA =====
+      // ===== RETURN PRODUCT WITH PRICING =====
       return {
-        id: productId,
+        productId,
         title: product.title,
-        sku,
+        image: product.featuredImage?.url,
+        productType: product.productType,
+        vendor: product.vendor,
         regularPrice,
         proPrice,
-        appliedDiscounts, // Per-type discounts
-        productType: product.productType || "Uncategorized",
-        vendor: product.vendor || "Unknown",
-        image: product.featuredImage?.url,
-        override: override || null,
-        moq: moqData, // Per-type MOQ
-        tiers: tiersData, // Per-type tiers
-        hasPerTypeTiers, // Flag to indicate per-type mode
+        sku,
+        appliedDiscounts,
+        moqData,
+        tiersData,
+        hasPerTypeTiers,
+        hasOverride: !!override,
       };
     });
 
-    // ---------- APPLY FILTERS ----------
-    let filtered = products;
-    if (productType) {
-      filtered = filtered.filter((p) => p.productType === productType);
-    }
-    if (vendor) {
-      filtered = filtered.filter((p) => p.vendor === vendor);
-    }
-
-    console.log(
-      `✅ Returning ${filtered.length} products with per-type pricing`
-    );
+    console.log(`✅ Processed ${products.length} products with pricing`);
 
     // ---------- SEND RESPONSE ----------
     res.json({
       success: true,
-      products: filtered,
-      defaultDiscount: pricingRule.defaultDiscount, // Legacy
-      customerTypes, // Dynamic customer types from Settings
-      pagination: {
-        page: parseInt(page),
-        limit: parseInt(limit),
-        hasMore: productsResponse.data.data.products.pageInfo.hasNextPage,
-      },
+      products,
+      customerTypes,
+      hasNextPage: productsResponse.data.data.products.pageInfo.hasNextPage,
     });
   } catch (err) {
     console.error("❌ Error fetching products:", err);
@@ -305,216 +289,236 @@ router.get("/products", async (req, res) => {
 });
 
 // ========================================
-// PUT /api/pricing/default
-// Update global default discount (LEGACY)
+// PUT /api/pricing/product/:productId
+// Update pricing for a specific product
 // ========================================
-router.put("/default", async (req, res) => {
+router.put("/product/:productId", async (req, res) => {
   try {
-    const { discount } = req.body;
+    const { productId } = req.params;
+    const { discount, moqUpdates, tierUpdates } = req.body;
 
-    const pricingRule = await PricingRule.findOneAndUpdate(
-      { shopDomain: SHOPIFY_SHOP },
-      { defaultDiscount: discount, updatedAt: new Date() },
-      { new: true, upsert: true }
-    );
-
-    console.log(`✅ Updated default discount to ${discount}%`);
-    res.json({ success: true, defaultDiscount: pricingRule.defaultDiscount });
-  } catch (err) {
-    console.error("❌ Error updating default discount:", err);
-    res.status(500).json({ success: false, error: err.message });
-  }
-});
-
-// ========================================
-// POST /api/pricing/bulk-update
-// Bulk update product pricing rules
-// ========================================
-router.post("/bulk-update", async (req, res) => {
-  try {
-    const { products } = req.body;
+    console.log(`💾 Updating pricing for Product ${productId}`);
 
     // ---------- LOAD PRICING RULES ----------
     let pricingRule = await PricingRule.findOne({ shopDomain: SHOPIFY_SHOP });
     if (!pricingRule) {
-      pricingRule = new PricingRule({
+      pricingRule = await PricingRule.create({
         shopDomain: SHOPIFY_SHOP,
+        defaultDiscount: 0,
         productOverrides: [],
       });
     }
 
-    // ---------- PROCESS EACH PRODUCT UPDATE ----------
-    products.forEach((update) => {
-      console.log("🔍 INCOMING UPDATE:", JSON.stringify(update, null, 2));
+    // ---------- FIND OR CREATE PRODUCT OVERRIDE ----------
+    let override = pricingRule.productOverrides.find(
+      (p) => p.productId === productId
+    );
 
-      const existingIndex = pricingRule.productOverrides.findIndex(
-        (p) => p.productId === update.productId
-      );
+    if (!override) {
+      override = {
+        productId,
+        value: 0,
+        type: "percentage",
+        customerDiscounts: new Map(),
+        customerMOQ: new Map(),
+        customerTiers: new Map(),
+      };
+      pricingRule.productOverrides.push(override);
+    }
 
-      // ===== CONVERT FRONTEND FORMATS TO SCHEMA FORMATS =====
-
-      // Convert typeDiscounts → customerDiscounts (Map)
-      if (update.typeDiscounts) {
-        update.customerDiscounts = update.typeDiscounts;
-        delete update.typeDiscounts;
-
-        console.log(
-          "✅ CONVERTED TO customerDiscounts:",
-          JSON.stringify(update.customerDiscounts, null, 2)
-        );
-
-        // Schema requires value/type placeholders for per-type mode
-        if (update.value === undefined) update.value = 0;
-        if (update.type === undefined) update.type = "percentage";
-      }
-
-      // Convert moq object → customerMOQ (Map)
-      if (update.moq && typeof update.moq === "object") {
-        const moqMap = new Map();
-        Object.entries(update.moq).forEach(([key, value]) => {
-          if (value !== null && value !== undefined) {
-            moqMap.set(key, value);
-          }
+    // ---------- UPDATE DISCOUNT ----------
+    if (discount) {
+      if (discount.perType && Object.keys(discount.perType).length > 0) {
+        // Per-customer-type discounts
+        if (!override.customerDiscounts) {
+          override.customerDiscounts = new Map();
+        }
+        Object.entries(discount.perType).forEach(([typeId, data]) => {
+          override.customerDiscounts.set(typeId, {
+            value: data.value,
+            type: data.type || "percentage",
+          });
         });
-        update.customerMOQ = moqMap;
-      }
-
-      // Convert typeTiers object → customerTiers (Map)
-      if (update.typeTiers && typeof update.typeTiers === "object") {
-        const tiersMap = new Map();
-        Object.entries(update.typeTiers).forEach(([typeId, tiers]) => {
-          if (tiers && Array.isArray(tiers) && tiers.length > 0) {
-            tiersMap.set(typeId, tiers);
-          }
-        });
-        update.customerTiers = tiersMap;
-        delete update.typeTiers;
-
         console.log(
-          "✅ CONVERTED TO customerTiers:",
-          JSON.stringify(Object.fromEntries(tiersMap), null, 2)
+          `   ✅ Set per-type discounts for ${
+            Object.keys(discount.perType).length
+          } customer types`
         );
-      }
-
-      console.log(
-        "💾 FINAL UPDATE OBJECT:",
-        JSON.stringify(
-          {
-            productId: update.productId,
-            type: update.type,
-            value: update.value,
-            customerDiscounts: update.customerDiscounts,
-            customerMOQ: update.customerMOQ
-              ? Object.fromEntries(update.customerMOQ)
-              : null,
-            customerTiers: update.customerTiers
-              ? Object.fromEntries(update.customerTiers)
-              : null,
-            tiers: update.tiers, // Legacy global tiers
-          },
-          null,
-          2
-        )
-      );
-
-      // ===== UPDATE OR CREATE OVERRIDE =====
-      if (existingIndex >= 0) {
-        // Update existing override
-        pricingRule.productOverrides[existingIndex] = {
-          ...pricingRule.productOverrides[existingIndex],
-          ...update,
-          updatedAt: new Date(),
-        };
       } else {
-        // Create new override
-        pricingRule.productOverrides.push({
-          ...update,
-          updatedAt: new Date(),
-        });
+        // Global discount
+        override.value = discount.value;
+        override.type = discount.type || "percentage";
+        console.log(`   ✅ Set global discount: ${discount.value}%`);
       }
-    });
+    }
 
-    // ---------- SAVE TO DATABASE ----------
-    pricingRule.updatedAt = new Date();
+    // ---------- UPDATE MOQ ----------
+    if (moqUpdates) {
+      if (!override.customerMOQ) {
+        override.customerMOQ = new Map();
+      }
+      Object.entries(moqUpdates).forEach(([typeId, moqValue]) => {
+        if (moqValue > 0) {
+          override.customerMOQ.set(typeId, moqValue);
+        } else {
+          override.customerMOQ.delete(typeId);
+        }
+      });
+      console.log(
+        `   ✅ Updated MOQ for ${Object.keys(moqUpdates).length} customer types`
+      );
+    }
+
+    // ---------- UPDATE TIERS ----------
+    if (tierUpdates) {
+      if (!override.customerTiers) {
+        override.customerTiers = new Map();
+      }
+      Object.entries(tierUpdates).forEach(([typeId, tiers]) => {
+        if (tiers && tiers.length > 0) {
+          override.customerTiers.set(typeId, tiers);
+        } else {
+          override.customerTiers.delete(typeId);
+        }
+      });
+      console.log(
+        `   ✅ Updated tiers for ${
+          Object.keys(tierUpdates).length
+        } customer types`
+      );
+    }
+
+    // ---------- SAVE ----------
     await pricingRule.save();
+    console.log(`✅ Pricing saved for Product ${productId}`);
 
-    console.log(`✅ Bulk updated ${products.length} products`);
-    res.json({ success: true, updated: products.length });
+    res.json({ success: true, override });
   } catch (err) {
-    console.error("❌ Error bulk updating:", err);
+    console.error("❌ Error updating pricing:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
 // ========================================
-// POST /api/pricing/reset
-// Reset products to Settings defaults
+// DELETE /api/pricing/product/:productId
+// Reset product to default pricing
 // ========================================
-router.post("/reset", async (req, res) => {
+router.delete("/product/:productId", async (req, res) => {
   try {
-    const { productIds } = req.body;
+    const { productId } = req.params;
+
+    console.log(`🗑️ Resetting pricing for Product ${productId}`);
 
     const pricingRule = await PricingRule.findOne({ shopDomain: SHOPIFY_SHOP });
     if (!pricingRule) {
-      return res.json({ success: true, removed: 0 });
+      return res.json({ success: true, message: "No pricing rules to reset" });
     }
 
-    // Remove overrides for specified products
+    // Remove override
     pricingRule.productOverrides = pricingRule.productOverrides.filter(
-      (p) => !productIds.includes(p.productId)
+      (p) => p.productId !== productId
     );
 
-    pricingRule.updatedAt = new Date();
     await pricingRule.save();
+    console.log(`✅ Pricing reset for Product ${productId}`);
 
-    console.log(`✅ Reset ${productIds.length} products to default`);
-    res.json({ success: true, removed: productIds.length });
+    res.json({ success: true });
   } catch (err) {
-    console.error("❌ Error resetting products:", err);
+    console.error("❌ Error resetting pricing:", err);
     res.status(500).json({ success: false, error: err.message });
   }
 });
 
 // ========================================
 // GET /api/pricing/product/:productId
-// Get pricing for single product (Theme Integration)
+// PATCHED: Now supports variant-specific pricing
 // ========================================
+//
+// WHAT'S NEW:
+// - Accepts optional ?variantId= query parameter
+// - Fetches variant-specific price when variantId provided
+// - Falls back to product min price when no variantId
+// - All discount/tier/MOQ logic remains the same
+//
+// USAGE:
+// - Product level: /api/pricing/product/123?customerId=456
+// - Variant level: /api/pricing/product/123?customerId=456&variantId=789
+//
+// ========================================
+
 router.get("/product/:productId", async (req, res) => {
   try {
+    // ========================================
+    // EXTRACT PARAMETERS
+    // ========================================
     const { productId } = req.params;
-    const { customerId } = req.query;
+    const { customerId, variantId } = req.query; // NEW: variantId support
 
     console.log(
-      `🏷️ Fetching pricing for product ${productId}, customer ${
-        customerId || "guest"
+      `💰 Fetching pricing for Product ${productId}${
+        variantId ? ` / Variant ${variantId}` : ""
       }`
     );
 
-    // ---------- LOAD PRICING RULES ----------
+    // ========================================
+    // LOAD PRICING RULES
+    // ========================================
     const pricingRule = await PricingRule.findOne({ shopDomain: SHOPIFY_SHOP });
     if (!pricingRule) {
-      return res.json({
+      return res.status(404).json({
         success: false,
-        error: "No pricing configuration found",
+        error: "No pricing rules configured",
       });
     }
 
-    // ---------- FETCH PRODUCT FROM SHOPIFY ----------
-    const productQuery = `
-      query {
-        product(id: "gid://shopify/Product/${productId}") {
-          id
-          title
-          priceRangeV2 {
-            minVariantPrice {
-              amount
-              currencyCode
+    // ========================================
+    // LOAD SETTINGS (for currency)
+    // ========================================
+    const settings = await Settings.findOne({ shopDomain: SHOPIFY_SHOP });
+    const currencyCode = settings?.currencyCode || "USD";
+
+    // ========================================
+    // BUILD SHOPIFY GRAPHQL QUERY
+    // ========================================
+    // NEW: Two different queries based on whether variantId is provided
+    let productQuery;
+
+    if (variantId) {
+      // VARIANT-SPECIFIC QUERY
+      // Fetches exact price for the selected variant
+      productQuery = `
+        query {
+          productVariant(id: "gid://shopify/ProductVariant/${variantId}") {
+            id
+            price
+            product {
+              id
+              title
             }
           }
         }
-      }
-    `;
+      `;
+    } else {
+      // PRODUCT-LEVEL QUERY (original behavior)
+      // Uses minimum variant price as fallback
+      productQuery = `
+        query {
+          product(id: "gid://shopify/Product/${productId}") {
+            id
+            title
+            priceRangeV2 {
+              minVariantPrice {
+                amount
+              }
+            }
+          }
+        }
+      `;
+    }
 
+    // ========================================
+    // FETCH FROM SHOPIFY
+    // ========================================
     const productResponse = await axios.post(
       `https://${SHOPIFY_SHOP}/admin/api/2024-10/graphql.json`,
       { query: productQuery },
@@ -526,48 +530,117 @@ router.get("/product/:productId", async (req, res) => {
       }
     );
 
-    const product = productResponse.data.data.product;
-    if (!product) {
-      return res.json({ success: false, error: "Product not found" });
+    // ========================================
+    // EXTRACT PRODUCT DATA & PRICE
+    // ========================================
+    // NEW: Handle both variant-specific and product-level responses
+    let productData;
+    let regularPrice;
+
+    if (variantId) {
+      // Extract from variant query response
+      const variantData = productResponse.data.data.productVariant;
+      if (!variantData) {
+        return res.status(404).json({
+          success: false,
+          error: "Variant not found",
+        });
+      }
+      productData = variantData.product; // Parent product info
+      regularPrice = parseFloat(variantData.price); // Variant's specific price
+      console.log(`   📦 Variant price: $${regularPrice.toFixed(2)}`);
+    } else {
+      // Extract from product query response (original behavior)
+      productData = productResponse.data.data.product;
+      if (!productData) {
+        return res.status(404).json({
+          success: false,
+          error: "Product not found",
+        });
+      }
+      regularPrice = parseFloat(
+        productData.priceRangeV2.minVariantPrice.amount
+      );
+      console.log(`   📦 Product min price: $${regularPrice.toFixed(2)}`);
     }
 
-    const regularPrice = parseFloat(
-      product.priceRangeV2.minVariantPrice.amount
-    );
-    const currencyCode = product.priceRangeV2.minVariantPrice.currencyCode;
-
-    // ---------- GET PRODUCT OVERRIDE ----------
+    // ========================================
+    // GET PRODUCT OVERRIDE
+    // ========================================
     const override = pricingRule.productOverrides.find(
       (p) => p.productId === productId
     );
+    const hasOverride = !!override;
 
-    // ---------- CALCULATE PRO PRICE ----------
+    // ========================================
+    // CALCULATE PRO PRICE
+    // ========================================
+    // Same logic as before, just applied to regularPrice
+    // (which now might be variant-specific or product-level)
     let proPrice;
-    let hasOverride = false;
-    if (override) {
-      hasOverride = true;
+
+    if (
+      override &&
+      override.customerDiscounts &&
+      override.customerDiscounts.size > 0
+    ) {
+      // Per-customer-type discount
+      const customerTypes = settings?.customerTypes || [];
+      const firstType = customerTypes[0];
+      if (firstType) {
+        const firstTypeDiscount = override.customerDiscounts.get(firstType.id);
+        if (firstTypeDiscount) {
+          proPrice =
+            firstTypeDiscount.type === "fixed"
+              ? firstTypeDiscount.value
+              : regularPrice * (1 - firstTypeDiscount.value / 100);
+        } else {
+          proPrice =
+            regularPrice * (1 - (firstType.defaultDiscount || 0) / 100);
+        }
+      } else {
+        proPrice = regularPrice;
+      }
+    } else if (override && override.value !== undefined) {
+      // Global override
       proPrice =
         override.type === "fixed"
           ? override.value
           : regularPrice * (1 - override.value / 100);
     } else {
+      // Default discount
       proPrice = regularPrice * (1 - pricingRule.defaultDiscount / 100);
     }
 
-    // ---------- GET CUSTOMER STATUS ----------
-    let customerStatus = {
+    console.log(`   💰 Pro price: $${proPrice.toFixed(2)}`);
+
+    // ========================================
+    // DETERMINE CUSTOMER STATUS
+    // ========================================
+    const customerStatus = {
       isLoggedIn: false,
-      isPending: false,
       isApproved: false,
+      isPending: false,
       isRejected: false,
       accountType: "consumer",
       moq: null,
     };
 
+    // Fetch customer data if logged in
     if (customerId) {
       try {
-        const customerResponse = await axios.get(
-          `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
+        const customerQuery = `
+          query {
+            customer(id: "gid://shopify/Customer/${customerId}") {
+              id
+              tags
+            }
+          }
+        `;
+
+        const customerResponse = await axios.post(
+          `https://${SHOPIFY_SHOP}/admin/api/2024-10/graphql.json`,
+          { query: customerQuery },
           {
             headers: {
               "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
@@ -576,34 +649,43 @@ router.get("/product/:productId", async (req, res) => {
           }
         );
 
-        const customer = customerResponse.data.customer;
-        const tags = customer.tags.split(", ");
+        const customerData = customerResponse.data.data.customer;
+        if (customerData) {
+          customerStatus.isLoggedIn = true;
+          const tags = customerData.tags;
 
-        customerStatus.isLoggedIn = true;
-        customerStatus.isPending = tags.includes("pending-approval");
-        customerStatus.isApproved = tags.includes("pro-pricing");
-        customerStatus.isRejected = tags.includes("rejected");
+          // Check approval status
+          if (tags.includes("pro-pricing")) {
+            customerStatus.isApproved = true;
+          } else if (tags.includes("pending")) {
+            customerStatus.isPending = true;
+          } else if (tags.includes("rejected")) {
+            customerStatus.isRejected = true;
+          }
 
-        // Determine account type from tags
-        if (tags.includes("student")) customerStatus.accountType = "student";
-        else if (tags.includes("esthetician"))
-          customerStatus.accountType = "esthetician";
-        else if (tags.includes("salon")) customerStatus.accountType = "salon";
-        else customerStatus.accountType = "consumer";
+          // Determine account type
+          if (tags.includes("student")) customerStatus.accountType = "student";
+          else if (tags.includes("esthetician"))
+            customerStatus.accountType = "esthetician";
+          else if (tags.includes("salon")) customerStatus.accountType = "salon";
+          else customerStatus.accountType = "consumer";
 
-        // Get MOQ for this customer type
-        if (override?.customerMOQ) {
-          customerStatus.moq =
-            override.customerMOQ.get(customerStatus.accountType) || null;
-        } else if (override?.moq) {
-          customerStatus.moq = override.moq[customerStatus.accountType];
+          // Get MOQ for this customer type
+          if (override?.customerMOQ) {
+            customerStatus.moq =
+              override.customerMOQ.get(customerStatus.accountType) || null;
+          } else if (override?.moq) {
+            customerStatus.moq = override.moq[customerStatus.accountType];
+          }
         }
       } catch (err) {
         console.error("Error fetching customer:", err.message);
       }
     }
 
-    // ---------- GET QUANTITY TIERS ----------
+    // ========================================
+    // GET QUANTITY TIERS
+    // ========================================
     let tiers = [];
     if (customerStatus.isApproved && override) {
       // Check per-type tiers first
@@ -616,7 +698,7 @@ router.get("/product/:productId", async (req, res) => {
             .map((tier) => ({
               qty: tier.qty,
               discount: tier.discount,
-              price: regularPrice * (1 - tier.discount / 100),
+              price: regularPrice * (1 - tier.discount / 100), // Applied to variant price
               savings: tier.discount,
             }))
             .sort((a, b) => a.qty - b.qty);
@@ -628,17 +710,20 @@ router.get("/product/:productId", async (req, res) => {
           .map((tier) => ({
             qty: tier.qty,
             discount: tier.discount,
-            price: regularPrice * (1 - tier.discount / 100),
+            price: regularPrice * (1 - tier.discount / 100), // Applied to variant price
             savings: tier.discount,
           }))
           .sort((a, b) => a.qty - b.qty);
       }
     }
 
-    // ---------- SEND RESPONSE ----------
+    // ========================================
+    // SEND RESPONSE
+    // ========================================
     res.json({
       success: true,
       productId,
+      variantId: variantId || null, // NEW: Include variant ID in response
       regularPrice,
       proPrice,
       currencyCode,
@@ -647,6 +732,8 @@ router.get("/product/:productId", async (req, res) => {
       moq: customerStatus.moq,
       hasOverride,
     });
+
+    console.log(`✅ Pricing response sent successfully`);
   } catch (err) {
     console.error("❌ Error fetching product pricing:", err);
     res.status(500).json({ success: false, error: err.message });
