@@ -478,16 +478,17 @@ router.post("/reset", async (req, res) => {
 // ========================================
 // GET /api/pricing/product/:productId
 // Get pricing for single product (Theme Integration)
+// PATCHED: Now supports variant-specific pricing
 // ========================================
 router.get("/product/:productId", async (req, res) => {
   try {
     const { productId } = req.params;
-    const { customerId, variantId } = req.query; // ADD variantId here
+    const { customerId, variantId } = req.query; // PATCHED: Added variantId
 
     console.log(
-      `🏷️ Fetching pricing for product ${productId}, customer ${
-        customerId || "guest"
-      }`
+      `🏷️ Fetching pricing for product ${productId}${
+        variantId ? `, variant ${variantId}` : ""
+      }, customer ${customerId || "guest"}`
     );
 
     // ---------- LOAD PRICING RULES ----------
@@ -500,20 +501,40 @@ router.get("/product/:productId", async (req, res) => {
     }
 
     // ---------- FETCH PRODUCT FROM SHOPIFY ----------
-    const productQuery = `
-      query {
-        product(id: "gid://shopify/Product/${productId}") {
-          id
-          title
-          priceRangeV2 {
-            minVariantPrice {
-              amount
-              currencyCode
+    // PATCHED: Conditional query based on variantId
+    let productQuery;
+
+    if (variantId) {
+      // Query specific variant price
+      productQuery = `
+        query {
+          productVariant(id: "gid://shopify/ProductVariant/${variantId}") {
+            id
+            price
+            product {
+              id
+              title
             }
           }
         }
-      }
-    `;
+      `;
+    } else {
+      // Query product min price (original behavior)
+      productQuery = `
+        query {
+          product(id: "gid://shopify/Product/${productId}") {
+            id
+            title
+            priceRangeV2 {
+              minVariantPrice {
+                amount
+                currencyCode
+              }
+            }
+          }
+        }
+      `;
+    }
 
     const productResponse = await axios.post(
       `https://${SHOPIFY_SHOP}/admin/api/2024-10/graphql.json`,
@@ -526,15 +547,26 @@ router.get("/product/:productId", async (req, res) => {
       }
     );
 
-    const product = productResponse.data.data.product;
-    if (!product) {
-      return res.json({ success: false, error: "Product not found" });
-    }
+    // PATCHED: Handle both variant and product responses
+    let regularPrice;
+    let currencyCode = "USD"; // Default
 
-    const regularPrice = parseFloat(
-      product.priceRangeV2.minVariantPrice.amount
-    );
-    const currencyCode = product.priceRangeV2.minVariantPrice.currencyCode;
+    if (variantId) {
+      // Extract variant price
+      const variant = productResponse.data.data.productVariant;
+      if (!variant) {
+        return res.json({ success: false, error: "Variant not found" });
+      }
+      regularPrice = parseFloat(variant.price);
+    } else {
+      // Extract product price (original)
+      const product = productResponse.data.data.product;
+      if (!product) {
+        return res.json({ success: false, error: "Product not found" });
+      }
+      regularPrice = parseFloat(product.priceRangeV2.minVariantPrice.amount);
+      currencyCode = product.priceRangeV2.minVariantPrice.currencyCode;
+    }
 
     // ---------- GET PRODUCT OVERRIDE ----------
     const override = pricingRule.productOverrides.find(
