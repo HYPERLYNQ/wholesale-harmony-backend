@@ -2,7 +2,7 @@
    SETTINGS API ROUTES
    Handles customer type configuration and form builder settings
    WITH ADDRESS BUNDLE SUPPORT (6 FIELDS INCLUDING APT/UNIT)
-   PATCHED: November 9, 2025
+   PATCHED: November 9, 2025 + Guest Pricing Control
    ======================================== */
 
 const express = require("express");
@@ -516,6 +516,38 @@ router.post("/fix-index", async (req, res) => {
     res.json({
       success: true,
       message: "Index might not exist or already dropped: " + error.message,
+    });
+  }
+});
+
+/* ========================================
+   PATCH /api/settings/guest-pricing
+   Update guest pricing type setting
+   NEW: Controls which customer type's pricing guests see
+   ======================================== */
+router.patch("/guest-pricing", async (req, res) => {
+  try {
+    const { guestPricingType } = req.body;
+    const shopDomain = `${process.env.SHOPIFY_SHOP_NAME}.myshopify.com`;
+
+    const settings = await Settings.findOneAndUpdate(
+      { shopDomain: shopDomain },
+      { guestPricingType: guestPricingType },
+      { new: true, upsert: true }
+    );
+
+    console.log(`✅ Updated guest pricing type to: ${guestPricingType}`);
+
+    res.json({
+      success: true,
+      guestPricingType: settings.guestPricingType,
+      message: `Guest pricing set to show ${guestPricingType} discount`,
+    });
+  } catch (err) {
+    console.error("❌ Error updating guest pricing:", err);
+    res.status(500).json({
+      success: false,
+      error: err.message,
     });
   }
 });
