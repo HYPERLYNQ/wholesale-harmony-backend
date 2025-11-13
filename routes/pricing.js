@@ -651,14 +651,32 @@ router.get("/product/:productId", async (req, res) => {
 
         // If customer NOT approved (guest, pending, or consumer), use guestPricingType setting
         if (!discountToUse) {
-          // Get the guest pricing type from settings
-          const guestTypeId =
-            settings?.guestPricingType || customerTypes[0]?.id;
-          discountToUse = override.customerDiscounts.get(guestTypeId);
+          // Get the guest pricing type from settings (can be tag like "wholesale" or ID)
+          let guestTypeId;
 
-          console.log(
-            `💰 Guest/unapproved user sees ${guestTypeId} pricing as teaser`
-          );
+          if (settings?.guestPricingType) {
+            // Find customer type by tag (e.g., "wholesale") or ID
+            const foundType = customerTypes.find(
+              (t) =>
+                t.tag === settings.guestPricingType ||
+                t.id === settings.guestPricingType
+            );
+            guestTypeId = foundType?.id || customerTypes[0]?.id;
+
+            console.log(
+              `💰 Guest/unapproved user sees ${
+                foundType?.name || "first type"
+              } (${guestTypeId}) pricing as teaser`
+            );
+          } else {
+            // Default to first customer type
+            guestTypeId = customerTypes[0]?.id;
+            console.log(
+              `💰 Guest/unapproved user sees ${customerTypes[0]?.name} (default) pricing as teaser`
+            );
+          }
+
+          discountToUse = override.customerDiscounts.get(guestTypeId);
         }
 
         // Calculate pro price based on discount
