@@ -2,6 +2,7 @@
    WHOLESALE HARMONY - SETTINGS MODEL
    MongoDB schema for customer types and form builder configuration
    WITH COMPLETE ADDRESS BUNDLE SUPPORT
+   PATCHED: Added guestPricingType field
    ======================================== */
 
 const mongoose = require("mongoose");
@@ -159,7 +160,7 @@ const CustomerTypeSchema = new mongoose.Schema({
   color: {
     type: String,
     default: "#A0AEC0",
-  }, // ← ADD THIS ENTIRE BLOCK
+  },
 
   description: {
     type: String,
@@ -355,6 +356,14 @@ const SettingsSchema = new mongoose.Schema(
       default: [],
     }, // Array of all customer types for this shop
 
+    /* ===== GUEST PRICING DISPLAY ===== */
+    guestPricingType: {
+      type: String,
+      default: null,
+    }, // Which customer type's pricing to show non-logged-in users (e.g., "wholesale")
+    // null = defaults to first customer type
+    // Set to a customer type ID to show that type's discount to guests
+
     /* ===== APP CONFIGURATION ===== */
     appName: {
       type: String,
@@ -396,6 +405,40 @@ module.exports = mongoose.model("Settings", SettingsSchema);
    ======================================== */
 
 /*
+  GUEST PRICING TYPE USAGE:
+  -------------------------
+  The guestPricingType field controls which customer type's discount
+  is shown to non-logged-in users on product pages.
+  
+  EXAMPLE:
+  --------
+  If you have these customer types:
+  - Student (9% discount)
+  - Wholesale (5% discount)
+  - Salon (5% discount)
+  
+  And you set: guestPricingType: "wholesale"
+  
+  Then guests will see the Wholesale discount (5%) as the "professional price"
+  to encourage them to sign up.
+  
+  WHY THIS MATTERS:
+  ----------------
+  - Sets realistic expectations (guests won't be disappointed)
+  - Encourages signups ("Unlock professional pricing!")
+  - Students get a pleasant surprise (9% instead of advertised 5%)
+  
+  HOW TO SET:
+  -----------
+  1. Via Settings UI (coming soon): Dropdown selector
+  2. Via MongoDB: Update the Settings document with the customer type ID
+  3. Via API: POST /api/settings with { guestPricingType: "wholesale" }
+  
+  DEFAULT BEHAVIOR:
+  ----------------
+  If guestPricingType is null, the system defaults to the first customer type
+  in the customerTypes array.
+  
   ADDRESS BUNDLE STRUCTURE:
   -------------------------
   When a user checks "Address (Home)" in the Form Builder,

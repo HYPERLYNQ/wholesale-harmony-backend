@@ -573,18 +573,9 @@ router.get("/product/:productId", async (req, res) => {
       (p) => p.productId === productId
     );
 
-    // ---------- CALCULATE PRO PRICE ----------
-    let proPrice;
-    let hasOverride = false;
-    if (override) {
-      hasOverride = true;
-      proPrice =
-        override.type === "fixed"
-          ? override.value
-          : regularPrice * (1 - override.value / 100);
-    } else {
-      proPrice = regularPrice * (1 - pricingRule.defaultDiscount / 100);
-    }
+    // ---------- LOAD SETTINGS (for customer types) ----------
+    const settings = await Settings.findOne({ shopDomain: SHOPIFY_SHOP });
+    const customerTypes = settings?.customerTypes || [];
 
     // ---------- GET CUSTOMER STATUS ----------
     let customerStatus = {
@@ -632,6 +623,75 @@ router.get("/product/:productId", async (req, res) => {
         }
       } catch (err) {
         console.error("Error fetching customer:", err.message);
+      }
+    }
+
+    // ---------- CALCULATE PRO PRICE (PER-CUSTOMER-TYPE) ----------
+    let proPrice;
+    let hasOverride = false;
+
+    if (override) {
+      hasOverride = true;
+
+      // Check if per-type discounts exist
+      if (override.customerDiscounts && override.customerDiscounts.size > 0) {
+        // PER-TYPE MODE: Different discount for each customer type
+
+        let discountToUse;
+
+        // If customer is approved, use their specific type's discount
+        if (customerStatus.isApproved && customerStatus.accountType) {
+          discountToUse = override.customerDiscounts.get(
+            customerStatus.accountType
+          );
+          console.log(
+            `💰 Approved customer (${customerStatus.accountType}) gets their type's discount`
+          );
+        }
+
+        // If customer NOT approved (guest, pending, or consumer), use guestPricingType setting
+        if (!discountToUse) {
+          // Get the guest pricing type from settings
+          const guestTypeId =
+            settings?.guestPricingType || customerTypes[0]?.id;
+          discountToUse = override.customerDiscounts.get(guestTypeId);
+
+          console.log(
+            `💰 Guest/unapproved user sees ${guestTypeId} pricing as teaser`
+          );
+        }
+
+        // Calculate pro price based on discount
+        if (discountToUse) {
+          proPrice =
+            discountToUse.type === "fixed"
+              ? discountToUse.value
+              : regularPrice * (1 - discountToUse.value / 100);
+        } else {
+          // Fallback if no discount found
+          proPrice = regularPrice;
+        }
+      }
+      // GLOBAL MODE: Same discount for all types
+      else if (override.value !== undefined) {
+        proPrice =
+          override.type === "fixed"
+            ? override.value
+            : regularPrice * (1 - override.value / 100);
+
+        console.log(
+          `💰 Global pricing: All types get ${override.value}${
+            override.type === "percentage" ? "%" : ""
+          } off`
+        );
+      }
+    } else {
+      // No override - use default discount from settings
+      if (customerTypes.length > 0) {
+        const firstTypeDiscount = customerTypes[0]?.defaultDiscount || 0;
+        proPrice = regularPrice * (1 - firstTypeDiscount / 100);
+      } else {
+        proPrice = regularPrice * (1 - pricingRule.defaultDiscount / 100);
       }
     }
 
