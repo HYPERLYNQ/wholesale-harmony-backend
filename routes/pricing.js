@@ -957,23 +957,26 @@ router.get("/cart-discount", async (req, res) => {
 // CUSTOMER-SPECIFIC PRICING ROUTES
 // ========================================
 
+/// ========================================
+// SIMPLIFIED FIX FOR GET /customer/:customerId
+// Replace the existing route in pricing.js with this
+// ========================================
+
 // GET /api/pricing/customer/:customerId
 router.get("/customer/:customerId", async (req, res) => {
   try {
     const { customerId } = req.params;
-    const { shop } = req.query;
+    // Use SHOPIFY_SHOP constant (matches index.js format)
+    const shop = SHOPIFY_SHOP;
 
     console.log(`📋 Fetching pricing for customer ${customerId}`);
 
-    const pricing = await CustomerPricing.getOrCreate(
-      customerId,
-      shop || SHOPIFY_SHOP
-    );
+    // Get or create pricing document
+    const pricing = await CustomerPricing.getOrCreate(customerId, shop);
 
+    // Fetch customer using EXACT same format as index.js
     const customerResponse = await axios.get(
-      `https://${
-        shop || SHOPIFY_SHOP
-      }/admin/api/2024-10/customers/${customerId}.json`,
+      `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
       {
         headers: {
           "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
@@ -984,10 +987,11 @@ router.get("/customer/:customerId", async (req, res) => {
 
     const customer = customerResponse.data.customer;
 
-    const settings = await Settings.findOne({
-      shopDomain: shop || SHOPIFY_SHOP,
-    });
+    // Get customer types from Settings
+    const settings = await Settings.findOne({ shopDomain: SHOPIFY_SHOP });
     const customerTypes = settings?.customerTypes || [];
+
+    // Find customer's type from tags
     const customerTags = customer.tags
       ? customer.tags.split(", ").map((tag) => tag.trim().toLowerCase())
       : [];
@@ -996,11 +1000,13 @@ router.get("/customer/:customerId", async (req, res) => {
       customerTags.includes(type.tag?.toLowerCase())
     );
 
+    // Update pricing document with customer info
     pricing.customerEmail = customer.email;
     pricing.customerType = assignedType?.tag || null;
     pricing.baseDiscount = assignedType?.defaultDiscount || 0;
     await pricing.save();
 
+    // Return response
     res.json({
       success: true,
       customer: {
@@ -1018,7 +1024,10 @@ router.get("/customer/:customerId", async (req, res) => {
     });
   } catch (error) {
     console.error("❌ Error fetching customer pricing:", error.message);
-    res.status(500).json({ error: error.message });
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
   }
 });
 
