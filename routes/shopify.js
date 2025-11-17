@@ -65,13 +65,25 @@ router.get("/customers", async (req, res) => {
         phone: customer.phone,
         tags: customer.tags ? customer.tags.split(", ") : [],
         createdAt: customer.created_at,
-        numberOfOrders: customer.orders_count,
-        amountSpent: customer.total_spent,
+        orders_count: customer.orders_count,
+        total_spent: customer.total_spent,
+        last_order_date: customer.last_order_date,
+        updated_at: customer.updated_at,
+        state: customer.state,
+        status: customerTags.includes("pro-pricing")
+          ? "approved"
+          : customerTags.includes("rejected")
+          ? "rejected"
+          : customerTags.includes("archived")
+          ? "archived"
+          : "pending",
         customerType: assignedType
           ? {
               id: assignedType._id.toString(),
               name: assignedType.name,
               tag: assignedType.tag,
+              icon: assignedType.icon,
+              defaultDiscount: assignedType.defaultDiscount,
             }
           : null,
       };
