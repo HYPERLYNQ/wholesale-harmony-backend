@@ -45,6 +45,10 @@ const customerPricingSchema = new mongoose.Schema(
           required: true,
         },
         originalPrice: Number, // Store for reference
+        retailPrice: {
+          type: Number,
+          required: true, // ✅ ADDED: Store Shopify retail price for visual hierarchy
+        },
 
         // Metadata
         note: String, // e.g., "Contract pricing - Renewal 2025-12-31"

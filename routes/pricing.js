@@ -1,6 +1,7 @@
 // ========================================
 // PRICING ROUTES - WHOLESALE HARMONY
 // Backend API for Product Pricing Management
+// ✅ PATCHED: Added retail price storage and visual hierarchy
 // ========================================
 //
 // This router handles:
@@ -11,6 +12,7 @@
 // - Bulk updates and product resets
 // - Theme integration endpoints
 // - Shopify Function cart discount calculations
+// - ✅ CUSTOMER-SPECIFIC PRICING with visual hierarchy
 //
 // ========================================
 
@@ -26,6 +28,36 @@ const CustomerPricing = require("../customerPricingModel");
 // ========================================
 const SHOPIFY_SHOP = `${process.env.SHOPIFY_SHOP_NAME}.myshopify.com`;
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
+
+// ========================================
+// ✅ HELPER FUNCTION: Get Retail Price from Shopify
+// ========================================
+async function getRetailPriceFromShopify(productId, variantId = null) {
+  try {
+    const productResponse = await axios.get(
+      `https://${SHOPIFY_SHOP}/admin/api/2024-10/products/${productId}.json`,
+      {
+        headers: {
+          "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    const product = productResponse.data.product;
+    const variant = variantId
+      ? product.variants.find((v) => v.id == variantId)
+      : product.variants[0];
+
+    return parseFloat(variant.price);
+  } catch (err) {
+    console.error(
+      `⚠️ Error fetching retail price for ${productId}:`,
+      err.message
+    );
+    return null;
+  }
+}
 
 // ========================================
 // GET /api/pricing/products
@@ -954,19 +986,14 @@ router.get("/cart-discount", async (req, res) => {
 });
 
 // ========================================
-// CUSTOMER-SPECIFIC PRICING ROUTES
+// ✅ CUSTOMER-SPECIFIC PRICING ROUTES (PATCHED)
 // ========================================
 
-/// ========================================
-// SIMPLIFIED FIX FOR GET /customer/:customerId
-// Replace the existing route in pricing.js with this
-// ========================================
-
-// GET /api/pricing/customer/:customerId
+// ✅ PATCHED: GET /api/pricing/customer/:customerId
+// Returns enriched product rules with price breakdown
 router.get("/customer/:customerId", async (req, res) => {
   try {
     const { customerId } = req.params;
-    // Use SHOPIFY_SHOP constant (matches index.js format)
     const shop = SHOPIFY_SHOP;
 
     console.log(`📋 Fetching pricing for customer ${customerId}`);
@@ -974,7 +1001,7 @@ router.get("/customer/:customerId", async (req, res) => {
     // Get or create pricing document
     const pricing = await CustomerPricing.getOrCreate(customerId, shop);
 
-    // Fetch customer using EXACT same format as index.js
+    // Fetch customer from Shopify
     const customerResponse = await axios.get(
       `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
       {
@@ -1006,6 +1033,46 @@ router.get("/customer/:customerId", async (req, res) => {
     pricing.baseDiscount = assignedType?.defaultDiscount || 0;
     await pricing.save();
 
+    // ✅ ENRICH RULES WITH PRICE BREAKDOWN
+    const enrichedRules = pricing.productRules.map((rule) => {
+      const retailPrice = rule.retailPrice || 0;
+      const baseDiscount = assignedType?.defaultDiscount || 0;
+
+      // Calculate type base price (retail - base discount)
+      const typeBasePrice = retailPrice * (1 - baseDiscount / 100);
+
+      // Calculate final price based on rule type
+      let finalPrice;
+      if (rule.ruleType === "fixed_price") {
+        finalPrice = rule.value;
+      } else if (rule.ruleType === "percentage") {
+        finalPrice = retailPrice * (1 - rule.value / 100);
+      } else if (rule.ruleType === "fixed_amount") {
+        finalPrice = Math.max(0, retailPrice - rule.value);
+      }
+
+      // Calculate savings
+      const savingsAmount = retailPrice - finalPrice;
+
+      return {
+        _id: rule._id,
+        productId: rule.productId,
+        productTitle: rule.productTitle,
+        variantId: rule.variantId,
+        variantTitle: rule.variantTitle,
+        ruleType: rule.ruleType,
+        value: rule.value,
+        note: rule.note,
+        expiresAt: rule.expiresAt,
+        createdAt: rule.createdAt,
+        // ✅ ADDED: Price breakdown for visual hierarchy
+        retailPrice: retailPrice,
+        typeBasePrice: typeBasePrice,
+        typeProductPrice: null, // For future: type-level product rules
+        savingsAmount: savingsAmount > 0 ? savingsAmount : 0,
+      };
+    });
+
     // Return response
     res.json({
       success: true,
@@ -1016,9 +1083,9 @@ router.get("/customer/:customerId", async (req, res) => {
         lastName: customer.last_name,
         type: assignedType?.name || "None",
         typeIcon: assignedType?.icon || "👤",
-        baseDiscount: assignedType?.defaultDiscount || 0,
+        baseDiscount: assignedType?.defaultDiscount || 0, // ✅ ADDED
       },
-      productRules: pricing.productRules,
+      productRules: enrichedRules, // ✅ ENRICHED with price breakdown
       tierRules: pricing.tierRules,
       priceLists: pricing.priceLists,
     });
@@ -1031,7 +1098,8 @@ router.get("/customer/:customerId", async (req, res) => {
   }
 });
 
-// POST /api/pricing/customer/:customerId/product-rule
+// ✅ PATCHED: POST /api/pricing/customer/:customerId/product-rule
+// Fetches retail price from Shopify and stores it
 router.post("/customer/:customerId/product-rule", async (req, res) => {
   try {
     const { customerId } = req.params;
@@ -1052,6 +1120,7 @@ router.post("/customer/:customerId/product-rule", async (req, res) => {
 
     console.log(`➕ Adding product rule for customer ${customerId}`);
 
+    // Validation
     if (!["percentage", "fixed_amount", "fixed_price"].includes(ruleType)) {
       return res.status(400).json({ error: "Invalid rule type" });
     }
@@ -1062,6 +1131,16 @@ router.post("/customer/:customerId/product-rule", async (req, res) => {
 
     if (ruleType === "percentage" && value > 100) {
       return res.status(400).json({ error: "Percentage cannot exceed 100%" });
+    }
+
+    // ✅ FETCH RETAIL PRICE FROM SHOPIFY
+    let retailPrice = 0;
+    try {
+      retailPrice = await getRetailPriceFromShopify(productId, variantId);
+      console.log(`📊 Retail price for ${productTitle}: $${retailPrice}`);
+    } catch (priceErr) {
+      console.error("⚠️ Could not fetch retail price:", priceErr.message);
+      // Continue anyway - retailPrice will be 0
     }
 
     const pricing = await CustomerPricing.getOrCreate(
@@ -1078,6 +1157,7 @@ router.post("/customer/:customerId/product-rule", async (req, res) => {
       ruleType,
       value: parseFloat(value),
       originalPrice: originalPrice ? parseFloat(originalPrice) : null,
+      retailPrice, // ✅ STORE RETAIL PRICE
       note: note || "",
       expiresAt: expiresAt ? new Date(expiresAt) : null,
       createdAt: new Date(),
@@ -1099,7 +1179,8 @@ router.post("/customer/:customerId/product-rule", async (req, res) => {
   }
 });
 
-// PUT /api/pricing/customer/:customerId/product-rule/:ruleId
+// ✅ PATCHED: PUT /api/pricing/customer/:customerId/product-rule/:ruleId
+// Refreshes retail price when editing
 router.put("/customer/:customerId/product-rule/:ruleId", async (req, res) => {
   try {
     const { customerId, ruleId } = req.params;
@@ -1119,6 +1200,7 @@ router.put("/customer/:customerId/product-rule/:ruleId", async (req, res) => {
       return res.status(404).json({ error: "Customer pricing not found" });
     }
 
+    // Validation
     if (updates.ruleType) {
       if (
         !["percentage", "fixed_amount", "fixed_price"].includes(
@@ -1132,6 +1214,26 @@ router.put("/customer/:customerId/product-rule/:ruleId", async (req, res) => {
     if (updates.value !== undefined) {
       if (updates.value <= 0) {
         return res.status(400).json({ error: "Invalid value" });
+      }
+    }
+
+    // ✅ REFRESH RETAIL PRICE FROM SHOPIFY
+    const rule = pricing.productRules.id(ruleId);
+    if (rule) {
+      try {
+        const freshRetailPrice = await getRetailPriceFromShopify(
+          rule.productId,
+          rule.variantId
+        );
+        if (freshRetailPrice !== null) {
+          updates.retailPrice = freshRetailPrice;
+          console.log(
+            `📊 Updated retail price for ${rule.productTitle}: $${freshRetailPrice}`
+          );
+        }
+      } catch (priceErr) {
+        console.error("⚠️ Could not refresh retail price:", priceErr.message);
+        // Keep existing retailPrice
       }
     }
 
