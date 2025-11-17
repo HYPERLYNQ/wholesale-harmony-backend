@@ -2388,56 +2388,6 @@ app.post("/api/admin/activate-discount-function", async (req, res) => {
 });
 
 // ========================================
-// PRODUCT SEARCH FOR PRICING PANEL
-// ========================================
-app.get("/api/shopify/products/search", async (req, res) => {
-  try {
-    const { shop, query } = req.query;
-    const shopDomain = shop || SHOPIFY_SHOP;
-
-    if (!query || query.length < 2) {
-      return res.json({
-        success: true,
-        products: [],
-      });
-    }
-
-    const response = await axios.get(
-      `https://${shopDomain}/admin/api/2024-10/products.json?title=${encodeURIComponent(
-        query
-      )}&limit=10`,
-      {
-        headers: {
-          "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
-          "Content-Type": "application/json",
-        },
-      }
-    );
-
-    const products = response.data.products.map((product) => ({
-      id: product.id,
-      title: product.title,
-      variants: product.variants.map((variant) => ({
-        id: variant.id,
-        title: variant.title,
-        price: variant.price,
-      })),
-    }));
-
-    res.json({
-      success: true,
-      products,
-    });
-  } catch (error) {
-    console.error("❌ Error searching products:", error);
-    res.status(500).json({
-      success: false,
-      error: error.message,
-    });
-  }
-});
-
-// ========================================
 // PRODUCT SEARCH FOR PRICING PANEL (GraphQL)
 // ========================================
 app.get("/api/shopify/products/search", async (req, res) => {
