@@ -641,7 +641,7 @@ router.delete("/discount-codes/:priceRuleId", async (req, res) => {
  */
 router.get("/products/search", async (req, res) => {
   try {
-    const { query, shop } = req.query;
+    const { query } = req.query; // Removed shop from query params
 
     // Validate query
     if (!query || query.length < 2) {
@@ -654,7 +654,8 @@ router.get("/products/search", async (req, res) => {
 
     console.log(`🔍 Searching products for: "${query}"`);
 
-    const shopDomain = shop || SHOPIFY_SHOP;
+    // ✅ ALWAYS use backend's configured shop (where products actually are)
+    const shopDomain = SHOPIFY_SHOP;
     const normalizedQuery = normalizeString(query);
 
     // GraphQL query to fetch products with variants
