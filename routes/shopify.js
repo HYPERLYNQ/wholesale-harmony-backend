@@ -1,17 +1,50 @@
+// ========================================
+// SHOPIFY API ROUTES - WHOLESALE HARMONY
+// Customer management, discount codes, and product search
+// ========================================
+
 const express = require("express");
 const router = express.Router();
 const axios = require("axios");
 
+// ========================================
+// CONFIGURATION
+// ========================================
 const SHOPIFY_SHOP = `${process.env.SHOPIFY_SHOP_NAME}.myshopify.com`;
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
 const Settings = require("../settingsModel");
 
-// GET /api/shopify/customers
+// ========================================
+// ✅ HELPER FUNCTIONS
+// ========================================
+
+/**
+ * Normalize strings to ignore accents and special characters
+ * Used for search functionality to match "monoi" with "Monoï"
+ */
+const normalizeString = (str) => {
+  if (!str) return "";
+  return str
+    .normalize("NFD") // Decompose combined characters
+    .replace(/[\u0300-\u036f]/g, "") // Remove diacritics
+    .toLowerCase()
+    .trim();
+};
+
+// ========================================
+// CUSTOMER ROUTES
+// ========================================
+
+/**
+ * GET /api/shopify/customers
+ * Fetch all customers with their assigned customer types
+ */
 router.get("/customers", async (req, res) => {
   try {
     console.log("📋 Fetching all customers with types...");
 
+    // Paginate through all customers
     let allCustomers = [];
     let hasMore = true;
     let since_id = null;
@@ -39,6 +72,7 @@ router.get("/customers", async (req, res) => {
 
     console.log(`✅ Fetched ${allCustomers.length} total customers`);
 
+    // Load customer types from settings
     const settings = await Settings.findOne({ shopDomain: SHOPIFY_SHOP });
     const customerTypes = settings?.customerTypes || [];
 
@@ -47,6 +81,7 @@ router.get("/customers", async (req, res) => {
       console.log(`   - ${t.name} (tag: ${t.tag})`);
     });
 
+    // Map customers with their types
     const customersWithTypes = allCustomers.map((customer) => {
       const customerTags = customer.tags
         ? customer.tags.split(", ").map((tag) => tag.trim().toLowerCase())
@@ -105,7 +140,10 @@ router.get("/customers", async (req, res) => {
   }
 });
 
-// POST /api/shopify/customers/assign-type
+/**
+ * POST /api/shopify/customers/assign-type
+ * Assign a customer type to a single customer via tags
+ */
 router.post("/customers/assign-type", async (req, res) => {
   try {
     const { customerId, customerTypeId } = req.body;
@@ -114,6 +152,7 @@ router.post("/customers/assign-type", async (req, res) => {
       `🏷️ Assigning type ${customerTypeId} to customer ${customerId}`
     );
 
+    // Find the customer type
     const settings = await Settings.findOne({ shopDomain: SHOPIFY_SHOP });
     const customerType = settings?.customerTypes?.find(
       (t) => t._id.toString() === customerTypeId
@@ -123,6 +162,7 @@ router.post("/customers/assign-type", async (req, res) => {
       return res.status(404).json({ error: "Customer type not found" });
     }
 
+    // Fetch customer from Shopify
     const customerResponse = await axios.get(
       `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
       {
@@ -138,6 +178,7 @@ router.post("/customers/assign-type", async (req, res) => {
       ? customer.tags.split(", ").filter((t) => t)
       : [];
 
+    // Remove existing customer type tags
     const allCustomerTypes = settings?.customerTypes || [];
     const customerTypeTags = allCustomerTypes
       .map((t) => t.tag)
@@ -146,8 +187,10 @@ router.post("/customers/assign-type", async (req, res) => {
       (tag) => !customerTypeTags.includes(tag)
     );
 
+    // Add new customer type tag
     const newTags = [...nonTypeTags, customerType.tag];
 
+    // Update customer in Shopify
     await axios.put(
       `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
       {
@@ -179,7 +222,10 @@ router.post("/customers/assign-type", async (req, res) => {
   }
 });
 
-// POST /api/shopify/customers/bulk-assign
+/**
+ * POST /api/shopify/customers/bulk-assign
+ * Assign a customer type to multiple customers at once
+ */
 router.post("/customers/bulk-assign", async (req, res) => {
   try {
     const { customerIds, customerTypeId } = req.body;
@@ -188,6 +234,7 @@ router.post("/customers/bulk-assign", async (req, res) => {
       `🏷️ Bulk assigning type ${customerTypeId} to ${customerIds.length} customers`
     );
 
+    // Find the customer type
     const settings = await Settings.findOne({ shopDomain: SHOPIFY_SHOP });
     const customerType = settings?.customerTypes?.find(
       (t) => t._id.toString() === customerTypeId
@@ -199,6 +246,7 @@ router.post("/customers/bulk-assign", async (req, res) => {
 
     const results = { success: 0, errors: [] };
 
+    // Process each customer
     for (const customerId of customerIds) {
       try {
         const customerResponse = await axios.get(
@@ -216,6 +264,7 @@ router.post("/customers/bulk-assign", async (req, res) => {
           ? customer.tags.split(", ").filter((t) => t)
           : [];
 
+        // Remove existing customer type tags
         const allCustomerTypes = settings?.customerTypes || [];
         const customerTypeTags = allCustomerTypes
           .map((t) => t.tag)
@@ -225,6 +274,7 @@ router.post("/customers/bulk-assign", async (req, res) => {
         );
         const newTags = [...nonTypeTags, customerType.tag];
 
+        // Update customer
         await axios.put(
           `https://${SHOPIFY_SHOP}/admin/api/2024-10/customers/${customerId}.json`,
           {
@@ -261,7 +311,14 @@ router.post("/customers/bulk-assign", async (req, res) => {
   }
 });
 
-// POST /api/shopify/customers/generate-code - Single customer discount code
+// ========================================
+// DISCOUNT CODE ROUTES
+// ========================================
+
+/**
+ * POST /api/shopify/customers/generate-code
+ * Generate a customer-specific discount code
+ */
 router.post("/customers/generate-code", async (req, res) => {
   try {
     const {
@@ -342,7 +399,10 @@ router.post("/customers/generate-code", async (req, res) => {
   }
 });
 
-// POST /api/shopify/customers/bulk-generate-codes - Batch discount codes
+/**
+ * POST /api/shopify/customers/bulk-generate-codes
+ * Generate discount codes for multiple customers at once
+ */
 router.post("/customers/bulk-generate-codes", async (req, res) => {
   try {
     const { customers, discountType, discountValue, expiresAt, usageLimit } =
@@ -440,7 +500,10 @@ router.post("/customers/bulk-generate-codes", async (req, res) => {
   }
 });
 
-// GET /api/shopify/discount-codes - Fetch all discount codes
+/**
+ * GET /api/shopify/discount-codes
+ * Fetch all custom discount codes
+ */
 router.get("/discount-codes", async (req, res) => {
   try {
     console.log("📋 Fetching all discount codes...");
@@ -534,7 +597,10 @@ router.get("/discount-codes", async (req, res) => {
   }
 });
 
-// DELETE /api/shopify/discount-codes/:priceRuleId - Delete discount code
+/**
+ * DELETE /api/shopify/discount-codes/:priceRuleId
+ * Delete a discount code by deleting its price rule
+ */
 router.delete("/discount-codes/:priceRuleId", async (req, res) => {
   try {
     const { priceRuleId } = req.params;
@@ -563,4 +629,135 @@ router.delete("/discount-codes/:priceRuleId", async (req, res) => {
   }
 });
 
+// ========================================
+// ✅ PRODUCT SEARCH ROUTE (NEW!)
+// Search products with special character normalization
+// ========================================
+
+/**
+ * GET /api/shopify/products/search
+ * Search products by title or SKU with special character support
+ * Handles searches like "monoi" matching "Monoï of Tahiti"
+ */
+router.get("/products/search", async (req, res) => {
+  try {
+    const { query, shop } = req.query;
+
+    // Validate query
+    if (!query || query.length < 2) {
+      return res.json({
+        success: true,
+        products: [],
+        message: "Query too short",
+      });
+    }
+
+    console.log(`🔍 Searching products for: "${query}"`);
+
+    const shopDomain = shop || SHOPIFY_SHOP;
+    const normalizedQuery = normalizeString(query);
+
+    // GraphQL query to fetch products with variants
+    const graphqlQuery = `
+      query {
+        products(first: 20, query: "title:*${query}*") {
+          edges {
+            node {
+              id
+              title
+              priceRangeV2 {
+                minVariantPrice {
+                  amount
+                }
+              }
+              featuredImage {
+                url
+              }
+              variants(first: 10) {
+                edges {
+                  node {
+                    id
+                    title
+                    price
+                    sku
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const response = await axios.post(
+      `https://${shopDomain}/admin/api/2024-10/graphql.json`,
+      { query: graphqlQuery },
+      {
+        headers: {
+          "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    // Process products
+    const products = response.data.data.products.edges.map((edge) => {
+      const product = edge.node;
+      const productId = product.id.split("/").pop();
+
+      // Get first variant's SKU
+      const firstVariant = product.variants.edges[0]?.node;
+      const sku = firstVariant?.sku || "";
+
+      return {
+        id: productId,
+        title: product.title,
+        price: parseFloat(product.priceRangeV2.minVariantPrice.amount),
+        image: product.featuredImage?.url,
+        sku: sku,
+        variants: product.variants.edges.map((v) => ({
+          id: v.node.id.split("/").pop(),
+          title: v.node.title,
+          price: parseFloat(v.node.price),
+          sku: v.node.sku,
+        })),
+      };
+    });
+
+    // ========================================
+    // ✅ NORMALIZE & FILTER RESULTS
+    // Shopify's search doesn't handle special characters well,
+    // so we filter results here with normalization
+    // This allows "monoi" to match "Monoï"
+    // ========================================
+    const filteredProducts = products.filter((product) => {
+      const normalizedTitle = normalizeString(product.title);
+      const normalizedSku = normalizeString(product.sku);
+
+      return (
+        normalizedTitle.includes(normalizedQuery) ||
+        normalizedSku.includes(normalizedQuery)
+      );
+    });
+
+    console.log(
+      `✅ Found ${filteredProducts.length} products matching "${query}"`
+    );
+
+    res.json({
+      success: true,
+      products: filteredProducts,
+    });
+  } catch (error) {
+    console.error("❌ Error searching products:", error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
+// ========================================
+// EXPORT ROUTER
+// ========================================
 module.exports = router;
