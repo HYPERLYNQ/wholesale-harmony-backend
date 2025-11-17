@@ -2437,6 +2437,89 @@ app.get("/api/shopify/products/search", async (req, res) => {
   }
 });
 
+// ========================================
+// PRODUCT SEARCH FOR PRICING PANEL (GraphQL)
+// ========================================
+app.get("/api/shopify/products/search", async (req, res) => {
+  try {
+    const { shop, query } = req.query;
+    const shopDomain = shop || SHOPIFY_SHOP;
+
+    if (!query || query.length < 2) {
+      return res.json({
+        success: true,
+        products: [],
+      });
+    }
+
+    console.log(`🔍 Searching products for: "${query}"`);
+
+    // Use GraphQL to search products by title
+    const graphqlQuery = `
+      query {
+        products(first: 10, query: "title:*${query}*") {
+          edges {
+            node {
+              id
+              title
+              variants(first: 10) {
+                edges {
+                  node {
+                    id
+                    title
+                    price
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    const response = await axios.post(
+      `https://${shopDomain}/admin/api/2024-10/graphql.json`,
+      { query: graphqlQuery },
+      {
+        headers: {
+          "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    // Extract products from GraphQL response
+    const products = response.data.data.products.edges.map((edge) => {
+      const product = edge.node;
+      return {
+        id: product.id.split("/").pop(), // Extract numeric ID
+        title: product.title,
+        variants: product.variants.edges.map((vEdge) => {
+          const variant = vEdge.node;
+          return {
+            id: variant.id.split("/").pop(), // Extract numeric ID
+            title: variant.title,
+            price: variant.price,
+          };
+        }),
+      };
+    });
+
+    console.log(`✅ Found ${products.length} products matching "${query}"`);
+
+    res.json({
+      success: true,
+      products,
+    });
+  } catch (error) {
+    console.error("❌ Error searching products:", error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
 // Start server
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
