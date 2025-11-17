@@ -1059,7 +1059,14 @@ router.get("/customer/:customerId", async (req, res) => {
     // ========================================
 
     // Get or create pricing document
+    console.log(
+      `🔍 Looking for pricing with customerId: ${customerId}, shop: ${shop}`
+    );
     const pricing = await CustomerPricing.getOrCreate(customerId, shop);
+    console.log(`📊 Found document with ${pricing.productRules.length} rules`);
+    console.log(`📋 Document _id: ${pricing._id}`);
+    console.log(`📋 Document customerId: ${pricing.customerId}`);
+    console.log(`📋 Document shopDomain: ${pricing.shopDomain}`);
 
     // Fetch customer from Shopify
     const customerResponse = await axios.get(
