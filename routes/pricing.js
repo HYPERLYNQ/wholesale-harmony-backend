@@ -1,10 +1,9 @@
 // ========================================
 // PRICING ROUTES - WHOLESALE HARMONY
 // Backend API for Product Pricing Management
-// ✅ PATCHED: Added retail price storage and visual hierarchy
 // ========================================
 //
-// This router handles:
+// ✅ FEATURES:
 // - Fetching products with pricing data
 // - Per-customer-type discounts
 // - Per-customer-type MOQ (Minimum Order Quantity)
@@ -12,7 +11,9 @@
 // - Bulk updates and product resets
 // - Theme integration endpoints
 // - Shopify Function cart discount calculations
-// - ✅ CUSTOMER-SPECIFIC PRICING with visual hierarchy
+// - Customer-specific pricing with visual hierarchy
+// - ✅ NEW: Redis caching for performance optimization
+// - ✅ NEW: Retail price storage and calculation
 //
 // ========================================
 
@@ -30,8 +31,94 @@ const SHOPIFY_SHOP = `${process.env.SHOPIFY_SHOP_NAME}.myshopify.com`;
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
 // ========================================
-// ✅ HELPER FUNCTION: Get Retail Price from Shopify
+// ✅ REDIS CONFIGURATION & HELPERS
 // ========================================
+
+// Redis client setup (shared from main server)
+const { Redis } = require("@upstash/redis");
+
+let redisClient;
+const REDIS_ENABLED =
+  process.env.UPSTASH_REDIS_REST_URL && process.env.UPSTASH_REDIS_REST_TOKEN;
+
+if (REDIS_ENABLED) {
+  redisClient = new Redis({
+    url: process.env.UPSTASH_REDIS_REST_URL,
+    token: process.env.UPSTASH_REDIS_REST_TOKEN,
+  });
+  console.log("✅ Redis enabled in pricing routes");
+} else {
+  console.log("⚠️ Redis not configured - caching disabled for pricing routes");
+}
+
+/**
+ * Get cached result from Redis
+ * @param {string} key - Cache key
+ * @returns {Promise<any|null>} Cached data or null
+ */
+async function getCachedResult(key) {
+  if (!REDIS_ENABLED || !redisClient) return null;
+
+  try {
+    const cached = await redisClient.get(key);
+    if (cached) {
+      console.log(`💾 Cache HIT: ${key}`);
+      return typeof cached === "string" ? JSON.parse(cached) : cached;
+    }
+    console.log(`🔍 Cache MISS: ${key}`);
+    return null;
+  } catch (error) {
+    console.error(`⚠️ Redis GET error for ${key}:`, error.message);
+    return null;
+  }
+}
+
+/**
+ * Set cached result in Redis
+ * @param {string} key - Cache key
+ * @param {any} value - Data to cache
+ * @param {number} ttlSeconds - Time to live in seconds
+ */
+async function setCachedResult(key, value, ttlSeconds = 300) {
+  if (!REDIS_ENABLED || !redisClient) return;
+
+  try {
+    await redisClient.set(key, JSON.stringify(value), { ex: ttlSeconds });
+    console.log(`💾 Cached: ${key} (TTL: ${ttlSeconds}s)`);
+  } catch (error) {
+    console.error(`⚠️ Redis SET error for ${key}:`, error.message);
+  }
+}
+
+/**
+ * Invalidate customer pricing cache
+ * @param {string} customerId - Customer ID
+ */
+async function invalidateCustomerPricingCache(customerId) {
+  if (!REDIS_ENABLED || !redisClient) return;
+
+  try {
+    const cacheKey = `customer-pricing:${customerId}`;
+    await redisClient.del(cacheKey);
+    console.log(`🗑️ Cache invalidated for customer ${customerId}`);
+  } catch (error) {
+    console.error(
+      `⚠️ Cache invalidation error for ${customerId}:`,
+      error.message
+    );
+  }
+}
+
+// ========================================
+// ✅ HELPER: Get Retail Price from Shopify
+// ========================================
+
+/**
+ * Fetch retail price for a product/variant from Shopify
+ * @param {string} productId - Shopify product ID
+ * @param {string|null} variantId - Optional variant ID
+ * @returns {Promise<number|null>} Retail price or null
+ */
 async function getRetailPriceFromShopify(productId, variantId = null) {
   try {
     const productResponse = await axios.get(
@@ -52,7 +139,7 @@ async function getRetailPriceFromShopify(productId, variantId = null) {
     return parseFloat(variant.price);
   } catch (err) {
     console.error(
-      `⚠️ Error fetching retail price for ${productId}:`,
+      `⚠️ Error fetching retail price for product ${productId}:`,
       err.message
     );
     return null;
@@ -516,7 +603,7 @@ router.post("/reset", async (req, res) => {
 router.get("/product/:productId", async (req, res) => {
   try {
     const { productId } = req.params;
-    const { customerId, variantId } = req.query; // PATCHED: Added variantId
+    const { customerId, variantId } = req.query;
 
     console.log(
       `🏷️ Fetching pricing for product ${productId}${
@@ -534,7 +621,6 @@ router.get("/product/:productId", async (req, res) => {
     }
 
     // ---------- FETCH PRODUCT FROM SHOPIFY ----------
-    // PATCHED: Conditional query based on variantId
     let productQuery;
 
     if (variantId) {
@@ -580,19 +666,17 @@ router.get("/product/:productId", async (req, res) => {
       }
     );
 
-    // PATCHED: Handle both variant and product responses
+    // Handle both variant and product responses
     let regularPrice;
-    let currencyCode = "USD"; // Default
+    let currencyCode = "USD";
 
     if (variantId) {
-      // Extract variant price
       const variant = productResponse.data.data.productVariant;
       if (!variant) {
         return res.json({ success: false, error: "Variant not found" });
       }
       regularPrice = parseFloat(variant.price);
     } else {
-      // Extract product price (original)
       const product = productResponse.data.data.product;
       if (!product) {
         return res.json({ success: false, error: "Product not found" });
@@ -666,78 +750,47 @@ router.get("/product/:productId", async (req, res) => {
     if (override) {
       hasOverride = true;
 
-      // Check if per-type discounts exist
       if (override.customerDiscounts && override.customerDiscounts.size > 0) {
-        // PER-TYPE MODE: Different discount for each customer type
-
         let discountToUse;
 
-        // If customer is approved, use their specific type's discount
         if (customerStatus.isApproved && customerStatus.accountType) {
           discountToUse = override.customerDiscounts.get(
             customerStatus.accountType
           );
-          console.log(
-            `💰 Approved customer (${customerStatus.accountType}) gets their type's discount`
-          );
         }
 
-        // If customer NOT approved (guest, pending, or consumer), use guestPricingType setting
         if (!discountToUse) {
-          // Get the guest pricing type from settings (can be tag like "wholesale" or ID)
           let guestTypeId;
 
           if (settings?.guestPricingType) {
-            // Find customer type by tag (e.g., "wholesale") or ID
             const foundType = customerTypes.find(
               (t) =>
                 t.tag === settings.guestPricingType ||
                 t.id === settings.guestPricingType
             );
             guestTypeId = foundType?.id || customerTypes[0]?.id;
-
-            console.log(
-              `💰 Guest/unapproved user sees ${
-                foundType?.name || "first type"
-              } (${guestTypeId}) pricing as teaser`
-            );
           } else {
-            // Default to first customer type
             guestTypeId = customerTypes[0]?.id;
-            console.log(
-              `💰 Guest/unapproved user sees ${customerTypes[0]?.name} (default) pricing as teaser`
-            );
           }
 
           discountToUse = override.customerDiscounts.get(guestTypeId);
         }
 
-        // Calculate pro price based on discount
         if (discountToUse) {
           proPrice =
             discountToUse.type === "fixed"
               ? discountToUse.value
               : regularPrice * (1 - discountToUse.value / 100);
         } else {
-          // Fallback if no discount found
           proPrice = regularPrice;
         }
-      }
-      // GLOBAL MODE: Same discount for all types
-      else if (override.value !== undefined) {
+      } else if (override.value !== undefined) {
         proPrice =
           override.type === "fixed"
             ? override.value
             : regularPrice * (1 - override.value / 100);
-
-        console.log(
-          `💰 Global pricing: All types get ${override.value}${
-            override.type === "percentage" ? "%" : ""
-          } off`
-        );
       }
     } else {
-      // No override - use default discount from settings
       if (customerTypes.length > 0) {
         const firstTypeDiscount = customerTypes[0]?.defaultDiscount || 0;
         proPrice = regularPrice * (1 - firstTypeDiscount / 100);
@@ -749,7 +802,6 @@ router.get("/product/:productId", async (req, res) => {
     // ---------- GET QUANTITY TIERS ----------
     let tiers = [];
     if (customerStatus.isApproved && override) {
-      // Check per-type tiers first
       if (override.customerTiers && override.customerTiers.size > 0) {
         const typeTiers = override.customerTiers.get(
           customerStatus.accountType
@@ -764,9 +816,7 @@ router.get("/product/:productId", async (req, res) => {
             }))
             .sort((a, b) => a.qty - b.qty);
         }
-      }
-      // Fallback to global tiers
-      else if (override.tiers && override.tiers.length > 0) {
+      } else if (override.tiers && override.tiers.length > 0) {
         tiers = override.tiers
           .map((tier) => ({
             qty: tier.qty,
@@ -814,7 +864,6 @@ router.get("/cart-discount", async (req, res) => {
     let discountType = "none";
     let accountType = "consumer";
 
-    // ---------- CHECK IF CUSTOMER IS LOGGED IN ----------
     if (!customerId) {
       return res.json({
         success: true,
@@ -824,7 +873,7 @@ router.get("/cart-discount", async (req, res) => {
       });
     }
 
-    // ---------- FETCH CUSTOMER DATA ----------
+    // Fetch customer data
     try {
       const customerQuery = `
         query {
@@ -859,7 +908,6 @@ router.get("/cart-discount", async (req, res) => {
       const customerTags = customerData.tags;
       const isApproved = customerTags.includes("pro-pricing");
 
-      // Check if customer is approved
       if (!isApproved) {
         return res.json({
           success: true,
@@ -869,7 +917,6 @@ router.get("/cart-discount", async (req, res) => {
         });
       }
 
-      // Determine account type
       if (customerTags.includes("student")) accountType = "student";
       else if (customerTags.includes("esthetician"))
         accountType = "esthetician";
@@ -884,7 +931,7 @@ router.get("/cart-discount", async (req, res) => {
       });
     }
 
-    // ---------- LOAD PRICING RULES ----------
+    // Load pricing rules
     const pricingRule = await PricingRule.findOne({ shopDomain: SHOPIFY_SHOP });
     if (!pricingRule) {
       return res.json({
@@ -895,12 +942,12 @@ router.get("/cart-discount", async (req, res) => {
       });
     }
 
-    // ---------- GET PRODUCT OVERRIDE ----------
+    // Get product override
     const override = pricingRule.productOverrides.find(
       (p) => p.productId === productId
     );
 
-    // ---------- CALCULATE BASE DISCOUNT ----------
+    // Calculate base discount
     let baseDiscount = 0;
     if (override && override.type === "percentage") {
       baseDiscount = override.value;
@@ -908,23 +955,19 @@ router.get("/cart-discount", async (req, res) => {
       baseDiscount = pricingRule.defaultDiscount;
     }
 
-    // ---------- CHECK QUANTITY TIERS ----------
+    // Check quantity tiers
     if (override) {
       let tiersToCheck = [];
 
-      // Check per-type tiers first
       if (override.customerTiers && override.customerTiers.size > 0) {
         const typeTiers = override.customerTiers.get(accountType);
         if (typeTiers && typeTiers.length > 0) {
           tiersToCheck = typeTiers;
         }
-      }
-      // Fallback to global tiers
-      else if (override.tiers && override.tiers.length > 0) {
+      } else if (override.tiers && override.tiers.length > 0) {
         tiersToCheck = override.tiers;
       }
 
-      // Apply tier discount if quantity qualifies
       if (tiersToCheck.length > 0) {
         const sortedTiers = tiersToCheck
           .filter((tier) => parseInt(quantity) >= tier.qty)
@@ -949,7 +992,7 @@ router.get("/cart-discount", async (req, res) => {
       discountType = "default";
     }
 
-    // ---------- CHECK MINIMUM ORDER QUANTITY ----------
+    // Check minimum order quantity
     let meetsMinimum = true;
     if (override?.customerMOQ) {
       const moq = override.customerMOQ.get(accountType);
@@ -963,7 +1006,6 @@ router.get("/cart-discount", async (req, res) => {
       }
     }
 
-    // ---------- SEND RESPONSE ----------
     res.json({
       success: true,
       discount: meetsMinimum ? discountPercent : 0,
@@ -986,17 +1028,35 @@ router.get("/cart-discount", async (req, res) => {
 });
 
 // ========================================
-// ✅ CUSTOMER-SPECIFIC PRICING ROUTES (PATCHED)
+// ✅ CUSTOMER-SPECIFIC PRICING ROUTES
 // ========================================
 
-// ✅ PATCHED: GET /api/pricing/customer/:customerId
-// Returns enriched product rules with price breakdown
+// ========================================
+// GET /api/pricing/customer/:customerId
+// Fetch customer pricing with visual hierarchy
+// ✅ INCLUDES: Redis caching for performance
+// ========================================
 router.get("/customer/:customerId", async (req, res) => {
   try {
     const { customerId } = req.params;
     const shop = SHOPIFY_SHOP;
 
     console.log(`📋 Fetching pricing for customer ${customerId}`);
+
+    // ========================================
+    // ✅ CHECK REDIS CACHE FIRST
+    // ========================================
+    const cacheKey = `customer-pricing:${customerId}`;
+    const cachedResult = await getCachedResult(cacheKey);
+
+    if (cachedResult) {
+      console.log(`⚡ Returning cached pricing for customer ${customerId}`);
+      return res.json(cachedResult);
+    }
+
+    // ========================================
+    // CACHE MISS - FETCH FROM DATABASE & SHOPIFY
+    // ========================================
 
     // Get or create pricing document
     const pricing = await CustomerPricing.getOrCreate(customerId, shop);
@@ -1033,7 +1093,9 @@ router.get("/customer/:customerId", async (req, res) => {
     pricing.baseDiscount = assignedType?.defaultDiscount || 0;
     await pricing.save();
 
+    // ========================================
     // ✅ ENRICH RULES WITH PRICE BREAKDOWN
+    // ========================================
     const enrichedRules = pricing.productRules.map((rule) => {
       const retailPrice = rule.retailPrice || 0;
       const baseDiscount = assignedType?.defaultDiscount || 0;
@@ -1073,8 +1135,8 @@ router.get("/customer/:customerId", async (req, res) => {
       };
     });
 
-    // Return response
-    res.json({
+    // Build response
+    const response = {
       success: true,
       customer: {
         id: customer.id,
@@ -1083,12 +1145,19 @@ router.get("/customer/:customerId", async (req, res) => {
         lastName: customer.last_name,
         type: assignedType?.name || "None",
         typeIcon: assignedType?.icon || "👤",
-        baseDiscount: assignedType?.defaultDiscount || 0, // ✅ ADDED
+        baseDiscount: assignedType?.defaultDiscount || 0,
       },
-      productRules: enrichedRules, // ✅ ENRICHED with price breakdown
+      productRules: enrichedRules,
       tierRules: pricing.tierRules,
       priceLists: pricing.priceLists,
-    });
+    };
+
+    // ========================================
+    // ✅ CACHE THE RESULT (5 minutes)
+    // ========================================
+    await setCachedResult(cacheKey, response, 300);
+
+    res.json(response);
   } catch (error) {
     console.error("❌ Error fetching customer pricing:", error.message);
     res.status(500).json({
@@ -1098,8 +1167,11 @@ router.get("/customer/:customerId", async (req, res) => {
   }
 });
 
-// ✅ PATCHED: POST /api/pricing/customer/:customerId/product-rule
-// Fetches retail price from Shopify and stores it
+// ========================================
+// POST /api/pricing/customer/:customerId/product-rule
+// Add new product pricing rule
+// ✅ INCLUDES: Retail price fetching & cache invalidation
+// ========================================
 router.post("/customer/:customerId/product-rule", async (req, res) => {
   try {
     const { customerId } = req.params;
@@ -1133,11 +1205,15 @@ router.post("/customer/:customerId/product-rule", async (req, res) => {
       return res.status(400).json({ error: "Percentage cannot exceed 100%" });
     }
 
+    // ========================================
     // ✅ FETCH RETAIL PRICE FROM SHOPIFY
+    // ========================================
     let retailPrice = 0;
     try {
       retailPrice = await getRetailPriceFromShopify(productId, variantId);
-      console.log(`📊 Retail price for ${productTitle}: $${retailPrice}`);
+      if (retailPrice) {
+        console.log(`📊 Retail price for ${productTitle}: $${retailPrice}`);
+      }
     } catch (priceErr) {
       console.error("⚠️ Could not fetch retail price:", priceErr.message);
       // Continue anyway - retailPrice will be 0
@@ -1166,6 +1242,11 @@ router.post("/customer/:customerId/product-rule", async (req, res) => {
 
     await pricing.addProductRule(ruleData);
 
+    // ========================================
+    // ✅ INVALIDATE CACHE
+    // ========================================
+    await invalidateCustomerPricingCache(customerId);
+
     console.log(`✅ Product rule added for customer ${customerId}`);
 
     res.json({
@@ -1179,8 +1260,11 @@ router.post("/customer/:customerId/product-rule", async (req, res) => {
   }
 });
 
-// ✅ PATCHED: PUT /api/pricing/customer/:customerId/product-rule/:ruleId
-// Refreshes retail price when editing
+// ========================================
+// PUT /api/pricing/customer/:customerId/product-rule/:ruleId
+// Update existing product pricing rule
+// ✅ INCLUDES: Retail price refresh & cache invalidation
+// ========================================
 router.put("/customer/:customerId/product-rule/:ruleId", async (req, res) => {
   try {
     const { customerId, ruleId } = req.params;
@@ -1217,7 +1301,9 @@ router.put("/customer/:customerId/product-rule/:ruleId", async (req, res) => {
       }
     }
 
+    // ========================================
     // ✅ REFRESH RETAIL PRICE FROM SHOPIFY
+    // ========================================
     const rule = pricing.productRules.id(ruleId);
     if (rule) {
       try {
@@ -1239,6 +1325,11 @@ router.put("/customer/:customerId/product-rule/:ruleId", async (req, res) => {
 
     await pricing.updateProductRule(ruleId, updates);
 
+    // ========================================
+    // ✅ INVALIDATE CACHE
+    // ========================================
+    await invalidateCustomerPricingCache(customerId);
+
     console.log(`✅ Product rule updated for customer ${customerId}`);
 
     res.json({
@@ -1251,7 +1342,11 @@ router.put("/customer/:customerId/product-rule/:ruleId", async (req, res) => {
   }
 });
 
+// ========================================
 // DELETE /api/pricing/customer/:customerId/product-rule/:ruleId
+// Delete product pricing rule
+// ✅ INCLUDES: Cache invalidation
+// ========================================
 router.delete(
   "/customer/:customerId/product-rule/:ruleId",
   async (req, res) => {
@@ -1274,6 +1369,11 @@ router.delete(
 
       await pricing.removeProductRule(ruleId);
 
+      // ========================================
+      // ✅ INVALIDATE CACHE
+      // ========================================
+      await invalidateCustomerPricingCache(customerId);
+
       console.log(`✅ Product rule deleted for customer ${customerId}`);
 
       res.json({
@@ -1287,7 +1387,10 @@ router.delete(
   }
 );
 
+// ========================================
 // POST /api/pricing/customer/:customerId/tier-rule
+// Add tier pricing rule
+// ========================================
 router.post("/customer/:customerId/tier-rule", async (req, res) => {
   try {
     const { customerId } = req.params;
@@ -1350,7 +1453,10 @@ router.post("/customer/:customerId/tier-rule", async (req, res) => {
   }
 });
 
+// ========================================
 // DELETE /api/pricing/customer/:customerId/tier-rule/:ruleId
+// Delete tier pricing rule
+// ========================================
 router.delete("/customer/:customerId/tier-rule/:ruleId", async (req, res) => {
   try {
     const { customerId, ruleId } = req.params;
@@ -1381,7 +1487,10 @@ router.delete("/customer/:customerId/tier-rule/:ruleId", async (req, res) => {
   }
 });
 
+// ========================================
 // POST /api/pricing/customer/:customerId/calculate
+// Calculate effective price for a product
+// ========================================
 router.post("/customer/:customerId/calculate", async (req, res) => {
   try {
     const { customerId } = req.params;
