@@ -2428,7 +2428,7 @@ app.get("/api/shopify/products/search", async (req, res) => {
     `;
 
     const response = await axios.post(
-      `https://${shopDomain}/admin/api/2024-10/graphql.json`,
+      `https://${SHOPIFY_SHOP}/admin/api/2024-10/graphql.json`,
       { query: graphqlQuery },
       {
         headers: {
