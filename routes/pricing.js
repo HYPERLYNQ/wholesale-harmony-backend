@@ -1240,7 +1240,13 @@ router.post("/customer/:customerId/product-rule", async (req, res) => {
       updatedBy: updatedBy || "admin",
     };
 
-    await pricing.addProductRule(ruleData);
+    console.log("💾 About to save rule:", JSON.stringify(ruleData, null, 2));
+    const savedPricing = await pricing.addProductRule(ruleData);
+    console.log("📊 Rule count after save:", savedPricing.productRules.length);
+    console.log(
+      "📋 Saved rules:",
+      JSON.stringify(savedPricing.productRules, null, 2)
+    );
 
     // ========================================
     // ✅ INVALIDATE CACHE

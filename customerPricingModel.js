@@ -47,8 +47,7 @@ const customerPricingSchema = new mongoose.Schema(
         originalPrice: Number, // Store for reference
         retailPrice: {
           type: Number,
-          required: false, // ← Change to false
-          default: 0, // ← Add this line
+          required: true, // ✅ ADDED: Store Shopify retail price for visual hierarchy
         },
 
         // Metadata
