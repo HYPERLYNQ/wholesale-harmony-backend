@@ -1183,6 +1183,10 @@ router.post("/customer/:customerId/product-rule", async (req, res) => {
   try {
     const { customerId } = req.params;
     const { shop } = req.query;
+    // ✅ DEBUG: Log shop parameter
+    console.log(`💾 POST: shop from query = ${shop}`);
+    console.log(`💾 POST: SHOPIFY_SHOP env = ${SHOPIFY_SHOP}`);
+    console.log(`💾 POST: Will save to = ${shop || SHOPIFY_SHOP}`);
     const {
       productId,
       productTitle,
