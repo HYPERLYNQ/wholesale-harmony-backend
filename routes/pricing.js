@@ -1039,7 +1039,8 @@ router.get("/cart-discount", async (req, res) => {
 router.get("/customer/:customerId", async (req, res) => {
   try {
     const { customerId } = req.params;
-    const shop = SHOPIFY_SHOP;
+    const { shop } = req.query;
+    const shopDomain = shop || SHOPIFY_SHOP;
 
     console.log(`📋 Fetching pricing for customer ${customerId}`);
 
