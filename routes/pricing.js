@@ -19,6 +19,7 @@ const router = express.Router();
 const axios = require("axios");
 const PricingRule = require("../pricingModel");
 const Settings = require("../settingsModel");
+const CustomerPricing = require("../customerPricingModel");
 
 // ========================================
 // CONFIGURATION
@@ -949,6 +950,363 @@ router.get("/cart-discount", async (req, res) => {
       discount: 0,
       error: err.message,
     });
+  }
+});
+
+// ========================================
+// CUSTOMER-SPECIFIC PRICING ROUTES
+// ========================================
+
+// GET /api/pricing/customer/:customerId
+router.get("/customer/:customerId", async (req, res) => {
+  try {
+    const { customerId } = req.params;
+    const { shop } = req.query;
+
+    console.log(`📋 Fetching pricing for customer ${customerId}`);
+
+    const pricing = await CustomerPricing.getOrCreate(
+      customerId,
+      shop || SHOPIFY_SHOP
+    );
+
+    const customerResponse = await axios.get(
+      `https://${
+        shop || SHOPIFY_SHOP
+      }/admin/api/2024-10/customers/${customerId}.json`,
+      {
+        headers: {
+          "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    const customer = customerResponse.data.customer;
+
+    const settings = await Settings.findOne({
+      shopDomain: shop || SHOPIFY_SHOP,
+    });
+    const customerTypes = settings?.customerTypes || [];
+    const customerTags = customer.tags
+      ? customer.tags.split(", ").map((tag) => tag.trim().toLowerCase())
+      : [];
+
+    const assignedType = customerTypes.find((type) =>
+      customerTags.includes(type.tag?.toLowerCase())
+    );
+
+    pricing.customerEmail = customer.email;
+    pricing.customerType = assignedType?.tag || null;
+    pricing.baseDiscount = assignedType?.defaultDiscount || 0;
+    await pricing.save();
+
+    res.json({
+      success: true,
+      customer: {
+        id: customer.id,
+        email: customer.email,
+        firstName: customer.first_name,
+        lastName: customer.last_name,
+        type: assignedType?.name || "None",
+        typeIcon: assignedType?.icon || "👤",
+        baseDiscount: assignedType?.defaultDiscount || 0,
+      },
+      productRules: pricing.productRules,
+      tierRules: pricing.tierRules,
+      priceLists: pricing.priceLists,
+    });
+  } catch (error) {
+    console.error("❌ Error fetching customer pricing:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/pricing/customer/:customerId/product-rule
+router.post("/customer/:customerId/product-rule", async (req, res) => {
+  try {
+    const { customerId } = req.params;
+    const { shop } = req.query;
+    const {
+      productId,
+      productTitle,
+      productHandle,
+      variantId,
+      variantTitle,
+      ruleType,
+      value,
+      originalPrice,
+      note,
+      expiresAt,
+      updatedBy,
+    } = req.body;
+
+    console.log(`➕ Adding product rule for customer ${customerId}`);
+
+    if (!["percentage", "fixed_amount", "fixed_price"].includes(ruleType)) {
+      return res.status(400).json({ error: "Invalid rule type" });
+    }
+
+    if (!value || value <= 0) {
+      return res.status(400).json({ error: "Invalid value" });
+    }
+
+    if (ruleType === "percentage" && value > 100) {
+      return res.status(400).json({ error: "Percentage cannot exceed 100%" });
+    }
+
+    const pricing = await CustomerPricing.getOrCreate(
+      customerId,
+      shop || SHOPIFY_SHOP
+    );
+
+    const ruleData = {
+      productId,
+      productTitle,
+      productHandle,
+      variantId: variantId || null,
+      variantTitle: variantTitle || null,
+      ruleType,
+      value: parseFloat(value),
+      originalPrice: originalPrice ? parseFloat(originalPrice) : null,
+      note: note || "",
+      expiresAt: expiresAt ? new Date(expiresAt) : null,
+      createdAt: new Date(),
+      updatedBy: updatedBy || "admin",
+    };
+
+    await pricing.addProductRule(ruleData);
+
+    console.log(`✅ Product rule added for customer ${customerId}`);
+
+    res.json({
+      success: true,
+      message: "Product rule added successfully",
+      rule: ruleData,
+    });
+  } catch (error) {
+    console.error("❌ Error adding product rule:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// PUT /api/pricing/customer/:customerId/product-rule/:ruleId
+router.put("/customer/:customerId/product-rule/:ruleId", async (req, res) => {
+  try {
+    const { customerId, ruleId } = req.params;
+    const { shop } = req.query;
+    const updates = req.body;
+
+    console.log(
+      `✏️ Updating product rule ${ruleId} for customer ${customerId}`
+    );
+
+    const pricing = await CustomerPricing.findOne({
+      customerId,
+      shopDomain: shop || SHOPIFY_SHOP,
+    });
+
+    if (!pricing) {
+      return res.status(404).json({ error: "Customer pricing not found" });
+    }
+
+    if (updates.ruleType) {
+      if (
+        !["percentage", "fixed_amount", "fixed_price"].includes(
+          updates.ruleType
+        )
+      ) {
+        return res.status(400).json({ error: "Invalid rule type" });
+      }
+    }
+
+    if (updates.value !== undefined) {
+      if (updates.value <= 0) {
+        return res.status(400).json({ error: "Invalid value" });
+      }
+    }
+
+    await pricing.updateProductRule(ruleId, updates);
+
+    console.log(`✅ Product rule updated for customer ${customerId}`);
+
+    res.json({
+      success: true,
+      message: "Product rule updated successfully",
+    });
+  } catch (error) {
+    console.error("❌ Error updating product rule:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/pricing/customer/:customerId/product-rule/:ruleId
+router.delete(
+  "/customer/:customerId/product-rule/:ruleId",
+  async (req, res) => {
+    try {
+      const { customerId, ruleId } = req.params;
+      const { shop } = req.query;
+
+      console.log(
+        `🗑️ Deleting product rule ${ruleId} for customer ${customerId}`
+      );
+
+      const pricing = await CustomerPricing.findOne({
+        customerId,
+        shopDomain: shop || SHOPIFY_SHOP,
+      });
+
+      if (!pricing) {
+        return res.status(404).json({ error: "Customer pricing not found" });
+      }
+
+      await pricing.removeProductRule(ruleId);
+
+      console.log(`✅ Product rule deleted for customer ${customerId}`);
+
+      res.json({
+        success: true,
+        message: "Product rule deleted successfully",
+      });
+    } catch (error) {
+      console.error("❌ Error deleting product rule:", error.message);
+      res.status(500).json({ error: error.message });
+    }
+  }
+);
+
+// POST /api/pricing/customer/:customerId/tier-rule
+router.post("/customer/:customerId/tier-rule", async (req, res) => {
+  try {
+    const { customerId } = req.params;
+    const { shop } = req.query;
+    const { appliesTo, productId, productTitle, tiers, updatedBy } = req.body;
+
+    console.log(`➕ Adding tier rule for customer ${customerId}`);
+
+    if (!tiers || !Array.isArray(tiers) || tiers.length === 0) {
+      return res.status(400).json({ error: "Invalid tiers data" });
+    }
+
+    for (const tier of tiers) {
+      if (!tier.quantity || tier.quantity <= 0) {
+        return res.status(400).json({ error: "Invalid tier quantity" });
+      }
+      if (!tier.discount || tier.discount <= 0) {
+        return res.status(400).json({ error: "Invalid tier discount" });
+      }
+      if (
+        tier.discountType === "percentage" &&
+        (tier.discount > 100 || tier.discount < 0)
+      ) {
+        return res
+          .status(400)
+          .json({ error: "Percentage must be between 0-100" });
+      }
+    }
+
+    const pricing = await CustomerPricing.getOrCreate(
+      customerId,
+      shop || SHOPIFY_SHOP
+    );
+
+    const tierData = {
+      appliesTo: appliesTo || "all_products",
+      productId: appliesTo === "specific_product" ? productId : null,
+      productTitle: appliesTo === "specific_product" ? productTitle : null,
+      tiers: tiers.map((tier) => ({
+        quantity: parseInt(tier.quantity),
+        discount: parseFloat(tier.discount),
+        discountType: tier.discountType || "percentage",
+      })),
+      createdAt: new Date(),
+      updatedBy: updatedBy || "admin",
+    };
+
+    await pricing.addTierRule(tierData);
+
+    console.log(`✅ Tier rule added for customer ${customerId}`);
+
+    res.json({
+      success: true,
+      message: "Tier rule added successfully",
+      rule: tierData,
+    });
+  } catch (error) {
+    console.error("❌ Error adding tier rule:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// DELETE /api/pricing/customer/:customerId/tier-rule/:ruleId
+router.delete("/customer/:customerId/tier-rule/:ruleId", async (req, res) => {
+  try {
+    const { customerId, ruleId } = req.params;
+    const { shop } = req.query;
+
+    console.log(`🗑️ Deleting tier rule ${ruleId} for customer ${customerId}`);
+
+    const pricing = await CustomerPricing.findOne({
+      customerId,
+      shopDomain: shop || SHOPIFY_SHOP,
+    });
+
+    if (!pricing) {
+      return res.status(404).json({ error: "Customer pricing not found" });
+    }
+
+    await pricing.removeTierRule(ruleId);
+
+    console.log(`✅ Tier rule deleted for customer ${customerId}`);
+
+    res.json({
+      success: true,
+      message: "Tier rule deleted successfully",
+    });
+  } catch (error) {
+    console.error("❌ Error deleting tier rule:", error.message);
+    res.status(500).json({ error: error.message });
+  }
+});
+
+// POST /api/pricing/customer/:customerId/calculate
+router.post("/customer/:customerId/calculate", async (req, res) => {
+  try {
+    const { customerId } = req.params;
+    const { shop } = req.query;
+    const { productId, variantId, regularPrice, quantity } = req.body;
+
+    console.log(`🧮 Calculating price for customer ${customerId}`);
+
+    const pricing = await CustomerPricing.findOne({
+      customerId,
+      shopDomain: shop || SHOPIFY_SHOP,
+    });
+
+    if (!pricing) {
+      return res.json({
+        success: true,
+        finalPrice: regularPrice,
+        appliedRule: null,
+        message: "No custom pricing rules found",
+      });
+    }
+
+    const result = pricing.calculatePrice(
+      productId,
+      variantId || null,
+      parseFloat(regularPrice),
+      parseInt(quantity) || 1
+    );
+
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    console.error("❌ Error calculating price:", error.message);
+    res.status(500).json({ error: error.message });
   }
 });
 
