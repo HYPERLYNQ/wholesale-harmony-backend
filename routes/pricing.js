@@ -3,6 +3,8 @@
 // Backend API for Product Pricing Management
 // ========================================
 //
+// 📊 ROUTE COUNT: 15 endpoints
+//
 // ✅ FEATURES:
 // - Fetching products with pricing data
 // - Per-customer-type discounts
@@ -14,7 +16,57 @@
 // - Customer-specific pricing with visual hierarchy
 // - ✅ NEW: Redis caching for performance optimization
 // - ✅ NEW: Retail price storage and calculation
+// - ✅ NEW: Fuzzy product search for batch operations
 //
+// ========================================
+// TABLE OF CONTENTS
+// ========================================
+//
+// 1. DEPENDENCIES & CONFIGURATION
+//    - Express router setup
+//    - Shopify configuration
+//    - Redis configuration & helpers
+//
+// 2. HELPER FUNCTIONS
+//    - getCachedResult()
+//    - setCachedResult()
+//    - invalidateCustomerPricingCache()
+//    - getRetailPriceFromShopify()
+//
+// 3. TYPE-BASED PRICING ROUTES (Legacy System)
+//    - GET  /api/pricing/products          - Fetch all products with pricing
+//    - PUT  /api/pricing/default           - Update default discount (LEGACY)
+//    - POST /api/pricing/bulk-update       - Bulk update pricing rules
+//    - POST /api/pricing/reset             - Reset products to defaults
+//
+// 4. THEME INTEGRATION ROUTES
+//    - GET /api/pricing/product/:productId - Single product pricing
+//    - GET /api/pricing/cart-discount      - Cart discount calculation
+//
+// 5. CUSTOMER-SPECIFIC PRICING ROUTES
+//    a) Customer Pricing Overview
+//       - GET /api/pricing/customer/:customerId - Fetch customer pricing
+//
+//    b) Product Rule Management (CRUD)
+//       - POST   /api/pricing/customer/:customerId/product-rule     - Add product rule
+//       - PUT    /api/pricing/customer/:customerId/product-rule/:id - Update product rule
+//       - DELETE /api/pricing/customer/:customerId/product-rule/:id - Delete product rule
+//
+//    c) Batch Operations & Product Search
+//       - POST /api/pricing/customer/:customerId/batch-add - Batch add rules
+//       - GET  /api/pricing/products/search                - Search products
+//
+//    d) Tier Pricing Rules
+//       - POST   /api/pricing/customer/:customerId/tier-rule    - Add tier rule
+//       - DELETE /api/pricing/customer/:customerId/tier-rule/:id - Delete tier rule
+//
+//    e) Price Calculation
+//       - POST /api/pricing/customer/:customerId/calculate - Calculate price
+//
+// ========================================
+
+// ========================================
+// 1. DEPENDENCIES & CONFIGURATION
 // ========================================
 
 const express = require("express");
@@ -25,16 +77,14 @@ const Settings = require("../settingsModel");
 const CustomerPricing = require("../customerPricingModel");
 
 // ========================================
-// CONFIGURATION
+// SHOPIFY CONFIGURATION
 // ========================================
 const SHOPIFY_SHOP = `${process.env.SHOPIFY_SHOP_NAME}.myshopify.com`;
 const SHOPIFY_ACCESS_TOKEN = process.env.SHOPIFY_ACCESS_TOKEN;
 
 // ========================================
-// ✅ REDIS CONFIGURATION & HELPERS
+// REDIS CONFIGURATION
 // ========================================
-
-// Redis client setup (shared from main server)
 const { Redis } = require("@upstash/redis");
 
 let redisClient;
@@ -50,6 +100,10 @@ if (REDIS_ENABLED) {
 } else {
   console.log("⚠️ Redis not configured - caching disabled for pricing routes");
 }
+
+// ========================================
+// 2. HELPER FUNCTIONS
+// ========================================
 
 /**
  * Get cached result from Redis
@@ -109,10 +163,6 @@ async function invalidateCustomerPricingCache(customerId) {
   }
 }
 
-// ========================================
-// ✅ HELPER: Get Retail Price from Shopify
-// ========================================
-
 /**
  * Fetch retail price for a product/variant from Shopify
  * @param {string} productId - Shopify product ID
@@ -145,6 +195,10 @@ async function getRetailPriceFromShopify(productId, variantId = null) {
     return null;
   }
 }
+
+// ========================================
+// 3. TYPE-BASED PRICING ROUTES (Legacy System)
+// ========================================
 
 // ========================================
 // GET /api/pricing/products
@@ -596,6 +650,10 @@ router.post("/reset", async (req, res) => {
 });
 
 // ========================================
+// 4. THEME INTEGRATION ROUTES
+// ========================================
+
+// ========================================
 // GET /api/pricing/product/:productId
 // Get pricing for single product (Theme Integration)
 // PATCHED: Now supports variant-specific pricing
@@ -1028,8 +1086,12 @@ router.get("/cart-discount", async (req, res) => {
 });
 
 // ========================================
-// ✅ CUSTOMER-SPECIFIC PRICING ROUTES
+// 5. CUSTOMER-SPECIFIC PRICING ROUTES
 // ========================================
+
+// ----------------------------------------
+// CUSTOMER PRICING OVERVIEW
+// ----------------------------------------
 
 // ========================================
 // GET /api/pricing/customer/:customerId
@@ -1174,6 +1236,10 @@ router.get("/customer/:customerId", async (req, res) => {
     });
   }
 });
+
+// ----------------------------------------
+// PRODUCT RULE MANAGEMENT (CRUD)
+// ----------------------------------------
 
 // ========================================
 // POST /api/pricing/customer/:customerId/product-rule
@@ -1405,18 +1471,14 @@ router.delete(
   }
 );
 
-
-
-
+// ----------------------------------------
+// BATCH OPERATIONS & PRODUCT SEARCH
+// ----------------------------------------
 
 // ========================================
 // POST /api/pricing/customer/:customerId/batch-add
 // Batch add multiple product pricing rules at once
 // ✅ INCLUDES: Retail price fetching & cache invalidation
-// ✅ NEW: Batch operation for adding 10+ products quickly
-//
-// 📍 INSERT THIS AFTER THE DELETE PRODUCT RULE ROUTE
-// 📍 BEFORE THE TIER-RULE ROUTE
 // ========================================
 router.post("/customer/:customerId/batch-add", async (req, res) => {
   try {
@@ -1601,8 +1663,116 @@ router.post("/customer/:customerId/batch-add", async (req, res) => {
 });
 
 // ========================================
+// GET /api/pricing/products/search
+// Fuzzy product search for batch add modal
+// ========================================
+router.get("/products/search", async (req, res) => {
+  try {
+    const { shop, query } = req.query;
+
+    console.log(`🔍 Searching products: "${query}"`);
+
+    if (!query || query.length < 2) {
+      return res.json({
+        success: true,
+        products: [],
+        message: "Query too short",
+      });
+    }
+
+    // Build fuzzy GraphQL query
+    // Matches: title, SKU, product type
+    const searchQuery = `
+      query {
+        products(first: 20, query: "title:*${query}* OR sku:*${query}* OR product_type:*${query}*") {
+          edges {
+            node {
+              id
+              title
+              handle
+              productType
+              vendor
+              featuredImage {
+                url
+              }
+              variants(first: 1) {
+                edges {
+                  node {
+                    id
+                    title
+                    price
+                    sku
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    `;
+
+    // Execute GraphQL query
+    const response = await axios.post(
+      `https://${shop || SHOPIFY_SHOP}/admin/api/2024-10/graphql.json`,
+      { query: searchQuery },
+      {
+        headers: {
+          "X-Shopify-Access-Token": SHOPIFY_ACCESS_TOKEN,
+          "Content-Type": "application/json",
+        },
+      }
+    );
+
+    if (response.data.errors) {
+      console.error("❌ GraphQL errors:", response.data.errors);
+      return res.json({
+        success: false,
+        error: "Search failed",
+        products: [],
+      });
+    }
+
+    // Format results
+    const products = response.data.data.products.edges.map((edge) => {
+      const product = edge.node;
+      const variant = product.variants.edges[0]?.node;
+
+      return {
+        id: product.id,
+        title: product.title,
+        handle: product.handle,
+        productType: product.productType || "Uncategorized",
+        vendor: product.vendor || "Unknown",
+        image: product.featuredImage?.url,
+        price: variant?.price || "0.00",
+        sku: variant?.sku || "",
+      };
+    });
+
+    console.log(`✅ Found ${products.length} products`);
+
+    res.json({
+      success: true,
+      products,
+      count: products.length,
+    });
+  } catch (error) {
+    console.error("❌ Product search error:", error);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+      products: [],
+    });
+  }
+});
+
+// ----------------------------------------
+// TIER PRICING RULES
+// ----------------------------------------
+
+// ========================================
 // POST /api/pricing/customer/:customerId/tier-rule
-// Add tier pricing rule
+// Add tier pricing rule for quantity-based discounts
 // ========================================
 router.post("/customer/:customerId/tier-rule", async (req, res) => {
   try {
@@ -1700,9 +1870,13 @@ router.delete("/customer/:customerId/tier-rule/:ruleId", async (req, res) => {
   }
 });
 
+// ----------------------------------------
+// PRICE CALCULATION
+// ----------------------------------------
+
 // ========================================
 // POST /api/pricing/customer/:customerId/calculate
-// Calculate effective price for a product
+// Calculate effective price for a product with all rules applied
 // ========================================
 router.post("/customer/:customerId/calculate", async (req, res) => {
   try {
