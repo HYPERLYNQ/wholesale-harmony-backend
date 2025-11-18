@@ -1668,7 +1668,7 @@ router.post("/customer/:customerId/batch-add", async (req, res) => {
 // ========================================
 router.get("/products/search", async (req, res) => {
   try {
-    const { shop, query } = req.query;
+    const { query } = req.query;  // ✅ REMOVED shop parameter
 
     console.log(`🔍 Searching products: "${query}"`);
 
@@ -1681,7 +1681,6 @@ router.get("/products/search", async (req, res) => {
     }
 
     // Build fuzzy GraphQL query
-    // Matches: title, SKU, product type
     const searchQuery = `
       query {
         products(first: 20, query: "title:*${query}* OR sku:*${query}* OR product_type:*${query}*") {
@@ -1711,9 +1710,9 @@ router.get("/products/search", async (req, res) => {
       }
     `;
 
-    // Execute GraphQL query
+    // Execute GraphQL query - ✅ ALWAYS use backend's configured shop
     const response = await axios.post(
-      `https://${shop || SHOPIFY_SHOP}/admin/api/2024-10/graphql.json`,
+      `https://${SHOPIFY_SHOP}/admin/api/2024-10/graphql.json`,
       { query: searchQuery },
       {
         headers: {
