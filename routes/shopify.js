@@ -658,10 +658,18 @@ router.get("/products/search", async (req, res) => {
     const shopDomain = SHOPIFY_SHOP;
     const normalizedQuery = normalizeString(query);
 
+    // ✅ Smart search strategy:
+    // 1. Use first few chars for broad Shopify search (catches products with special chars)
+    // 2. Then filter aggressively client-side with normalization
+    const shopifySearchTerm = query.length >= 4 ? query.substring(0, 4) : query;
+    console.log(
+      `   Shopify query: "${shopifySearchTerm}" | Client filter: "${normalizedQuery}"`
+    );
+
     // GraphQL query to fetch products with variants
     const graphqlQuery = `
       query {
-        products(first: 20, query: "title:*${query}*") {
+        products(first: 50, query: "title:*${shopifySearchTerm}*") {
           edges {
             node {
               id
