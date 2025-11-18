@@ -1405,6 +1405,201 @@ router.delete(
   }
 );
 
+
+
+
+
+// ========================================
+// POST /api/pricing/customer/:customerId/batch-add
+// Batch add multiple product pricing rules at once
+// ✅ INCLUDES: Retail price fetching & cache invalidation
+// ✅ NEW: Batch operation for adding 10+ products quickly
+//
+// 📍 INSERT THIS AFTER THE DELETE PRODUCT RULE ROUTE
+// 📍 BEFORE THE TIER-RULE ROUTE
+// ========================================
+router.post("/customer/:customerId/batch-add", async (req, res) => {
+  try {
+    const { customerId } = req.params;
+    const { shop } = req.query;
+    const { rules } = req.body;
+
+    console.log(`⚡ Batch adding ${rules?.length || 0} rules for customer ${customerId}`);
+
+    // ========================================
+    // VALIDATION
+    // ========================================
+    if (!rules || !Array.isArray(rules) || rules.length === 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Rules array is required and must not be empty",
+      });
+    }
+
+    // Validate each rule
+    const validationErrors = [];
+    rules.forEach((rule, index) => {
+      if (!rule.productId) {
+        validationErrors.push(`Rule ${index + 1}: productId is required`);
+      }
+      if (!rule.productTitle) {
+        validationErrors.push(`Rule ${index + 1}: productTitle is required`);
+      }
+      if (!rule.ruleType) {
+        validationErrors.push(`Rule ${index + 1}: ruleType is required`);
+      }
+      if (!["percentage", "fixed_amount", "fixed_price"].includes(rule.ruleType)) {
+        validationErrors.push(`Rule ${index + 1}: Invalid rule type`);
+      }
+      if (rule.value === undefined || rule.value <= 0) {
+        validationErrors.push(`Rule ${index + 1}: Invalid value`);
+      }
+      if (rule.ruleType === "percentage" && rule.value > 100) {
+        validationErrors.push(`Rule ${index + 1}: Percentage cannot exceed 100%`);
+      }
+    });
+
+    if (validationErrors.length > 0) {
+      return res.status(400).json({
+        success: false,
+        error: "Validation failed",
+        details: validationErrors,
+      });
+    }
+
+    // ========================================
+    // GET OR CREATE CUSTOMER PRICING DOCUMENT
+    // ========================================
+    const pricing = await CustomerPricing.getOrCreate(
+      customerId,
+      shop || SHOPIFY_SHOP
+    );
+
+    console.log(`📊 Found pricing document for customer ${customerId}`);
+
+    // ========================================
+    // PROCESS EACH RULE & FETCH RETAIL PRICES
+    // ========================================
+    const processedRules = [];
+    let successCount = 0;
+    let errorCount = 0;
+    const errors = [];
+
+    for (let i = 0; i < rules.length; i++) {
+      const rule = rules[i];
+      console.log(`   Processing ${i + 1}/${rules.length}: ${rule.productTitle}`);
+
+      try {
+        // ========================================
+        // ✅ FETCH RETAIL PRICE FROM SHOPIFY
+        // ========================================
+        let retailPrice = 0;
+        try {
+          const productIdClean = rule.productId.split("/").pop();
+          const variantIdClean = rule.variantId
+            ? rule.variantId.split("/").pop()
+            : null;
+
+          retailPrice = await getRetailPriceFromShopify(
+            productIdClean,
+            variantIdClean
+          );
+
+          if (retailPrice) {
+            console.log(`      Retail price: $${retailPrice}`);
+          } else {
+            console.log(`      ⚠️ Could not fetch retail price`);
+          }
+        } catch (priceErr) {
+          console.error(`      ⚠️ Retail price error: ${priceErr.message}`);
+          // Continue anyway - retailPrice will be 0
+        }
+
+        // ========================================
+        // BUILD RULE DATA OBJECT
+        // ========================================
+        const ruleData = {
+          productId: rule.productId,
+          productTitle: rule.productTitle,
+          productHandle: rule.productHandle || null,
+          variantId: rule.variantId || null,
+          variantTitle: rule.variantTitle || null,
+          ruleType: rule.ruleType,
+          value: parseFloat(rule.value),
+          originalPrice: rule.originalPrice
+            ? parseFloat(rule.originalPrice)
+            : null,
+          retailPrice, // ✅ STORE RETAIL PRICE
+          note: rule.note || "Batch added",
+          expiresAt: rule.expiresAt ? new Date(rule.expiresAt) : null,
+          createdAt: new Date(),
+          updatedBy: rule.updatedBy || "admin",
+        };
+
+        processedRules.push(ruleData);
+        successCount++;
+      } catch (ruleErr) {
+        console.error(
+          `      ❌ Error processing rule ${i + 1}:`,
+          ruleErr.message
+        );
+        errorCount++;
+        errors.push({
+          index: i + 1,
+          productTitle: rule.productTitle,
+          error: ruleErr.message,
+        });
+      }
+    }
+
+    // ========================================
+    // ADD ALL RULES TO CUSTOMER PRICING
+    // ========================================
+    if (processedRules.length > 0) {
+      console.log(`💾 Saving ${processedRules.length} rules to database...`);
+
+      for (const ruleData of processedRules) {
+        await pricing.addProductRule(ruleData);
+      }
+
+      console.log(`✅ Successfully saved ${processedRules.length} rules`);
+    }
+
+    // ========================================
+    // ✅ INVALIDATE CACHE
+    // ========================================
+    await invalidateCustomerPricingCache(customerId);
+
+    // ========================================
+    // SEND RESPONSE
+    // ========================================
+    const response = {
+      success: true,
+      message: `Batch add completed: ${successCount} succeeded, ${errorCount} failed`,
+      totalRequested: rules.length,
+      successCount,
+      errorCount,
+      addedRules: processedRules.length,
+    };
+
+    if (errors.length > 0) {
+      response.errors = errors;
+    }
+
+    console.log(
+      `⚡ Batch add complete for customer ${customerId}: ${successCount} rules added`
+    );
+
+    res.json(response);
+  } catch (error) {
+    console.error("❌ Error in batch add:", error.message);
+    res.status(500).json({
+      success: false,
+      error: error.message,
+    });
+  }
+});
+
 // ========================================
 // POST /api/pricing/customer/:customerId/tier-rule
 // Add tier pricing rule
