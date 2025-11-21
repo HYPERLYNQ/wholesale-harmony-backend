@@ -1407,24 +1407,27 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
       );
 
       const query = `
-        query GetCustomersWithMetafields($ids: [ID!]!) {
-          nodes(ids: $ids) {
-            ... on Customer {
-              id
-              metafields(first: 10) {
-                edges {
-                  node {
-                    key
-                    value
-                    namespace
-                  }
+      query GetCustomersWithMetafields($ids: [ID!]!) {
+        nodes(ids: $ids) {
+          ... on Customer {
+            id
+            firstName
+            lastName
+            email
+            phone
+            metafields(first: 10) {
+              edges {
+                node {
+                  key
+                  value
+                  namespace
                 }
               }
             }
           }
         }
-      `;
-
+      }
+    `;
       try {
         console.log(
           `📦 Fetching ${customerIds.length} customers with GraphQL...`
@@ -1482,10 +1485,10 @@ app.get("/api/admin/pending-approvals", async (req, res) => {
 
           customersWithDetails.push({
             id: customer.id,
-            firstName: customer.first_name,
-            lastName: customer.last_name,
-            email: customer.email,
-            phone: customer.phone || "N/A",
+            firstName: node.firstName || customer.first_name,     // ✅ Try GraphQL first
+            lastName: node.lastName || customer.last_name,        // ✅ Try GraphQL first
+            email: node.email || customer.email,                  // ✅ Try GraphQL first
+            phone: node.phone || customer.phone || "N/A",         // ✅ Try GraphQL first
             createdAt: customer.created_at,
             note: customer.note,
             tags: tags,
