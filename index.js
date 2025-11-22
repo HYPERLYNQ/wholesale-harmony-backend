@@ -10,6 +10,10 @@ const path = require("path");
 const FormData = require("form-data");
 const emailTemplates = require("./emailTemplates");
 
+// Add this with your other requires
+const { router: authRouter, getAccessToken } = require("./routes/auth");
+const Session = require("./sessionModel");
+
 // MongoDB Connection
 const mongoose = require("mongoose");
 
@@ -176,10 +180,30 @@ app.use("/api/pricing", pricingRoutes);
 app.use("/api/settings", settingsRoutes);
 app.use("/api/shopify", shopifyRoutes);
 
+// ========== AUTH ROUTES (OAuth) ==========
+app.use("/api", authRouter);
+
 // Test route
 app.get("/", (req, res) => {
   res.send("Shopify Registration Server is running!");
 });
+
+// ========== HELPER: Get Shopify Access Token for Shop ==========
+async function getShopifyToken(shop) {
+  // During development, use hardcoded token if shop matches
+  if (shop === `${process.env.SHOPIFY_SHOP_NAME}.myshopify.com`) {
+    return process.env.SHOPIFY_ACCESS_TOKEN;
+  }
+
+  // For OAuth-installed shops, get token from database
+  try {
+    const accessToken = await getAccessToken(shop);
+    return accessToken;
+  } catch (error) {
+    console.error(`❌ No access token found for shop: ${shop}`);
+    throw error;
+  }
+}
 
 // Cache helper functions
 async function getCachedResult(key) {
