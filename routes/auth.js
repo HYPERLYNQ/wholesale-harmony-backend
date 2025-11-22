@@ -15,7 +15,7 @@ const shopify = shopifyApi({
   apiSecretKey: process.env.SHOPIFY_API_SECRET,
   scopes: process.env.SHOPIFY_SCOPES.split(","),
   hostName: process.env.SHOPIFY_APP_URL.replace(/https?:\/\//, ""),
-  apiVersion: LATEST_API_VERSION,
+  apiVersion: ApiVersion.October24,
   isEmbeddedApp: false,
   restResources,
 });
