@@ -9,6 +9,7 @@ const fs = require("fs");
 const path = require("path");
 const FormData = require("form-data");
 const emailTemplates = require("./emailTemplates");
+const cookieParser = require("cookie-parser");
 
 // Add this with your other requires
 const { router: authRouter, getAccessToken } = require("./routes/auth");
@@ -169,6 +170,7 @@ if (REDIS_ENABLED) {
 // Middleware
 app.use(express.json());
 app.use(cors());
+app.use(cookieParser(process.env.SHOPIFY_API_SECRET));
 app.use(express.urlencoded({ extended: true }));
 
 // ========== PRICING ROUTES ==========

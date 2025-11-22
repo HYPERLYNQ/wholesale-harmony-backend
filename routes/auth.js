@@ -1,13 +1,47 @@
 const express = require("express");
 const router = express.Router();
-const {
-  shopifyApi,
-  ApiVersion,
-  LATEST_API_VERSION,
-} = require("@shopify/shopify-api");
+const { shopifyApi, ApiVersion } = require("@shopify/shopify-api");
 const { restResources } = require("@shopify/shopify-api/rest/admin/2024-10");
 require("@shopify/shopify-api/adapters/node");
 const Session = require("../sessionModel");
+
+// Configure session storage
+const sessionStorage = {
+  async storeSession(session) {
+    await Session.findOneAndUpdate(
+      { shop: session.shop },
+      {
+        shop: session.shop,
+        accessToken: session.accessToken,
+        scope: session.scope,
+        isOnline: session.isOnline,
+        expiresAt: session.expires,
+      },
+      { upsert: true, new: true }
+    );
+    return true;
+  },
+
+  async loadSession(id) {
+    const session = await Session.findOne({ shop: id });
+    if (!session) return undefined;
+
+    return {
+      id: session.shop,
+      shop: session.shop,
+      state: session.shop,
+      isOnline: session.isOnline,
+      scope: session.scope,
+      expires: session.expiresAt,
+      accessToken: session.accessToken,
+    };
+  },
+
+  async deleteSession(id) {
+    await Session.deleteOne({ shop: id });
+    return true;
+  },
+};
 
 // Initialize Shopify API
 const shopify = shopifyApi({
@@ -15,9 +49,11 @@ const shopify = shopifyApi({
   apiSecretKey: process.env.SHOPIFY_API_SECRET,
   scopes: process.env.SHOPIFY_SCOPES.split(","),
   hostName: process.env.SHOPIFY_APP_URL.replace(/https?:\/\//, ""),
+  hostScheme: "https",
   apiVersion: ApiVersion.October24,
-  isEmbeddedApp: true,
+  isEmbeddedApp: false,
   restResources,
+  sessionStorage,
 });
 
 // ========== OAUTH START ==========
@@ -46,7 +82,7 @@ router.get("/auth", async (req, res) => {
     res.redirect(authRoute);
   } catch (error) {
     console.error("OAuth start error:", error);
-    res.status(500).send("OAuth initialization failed");
+    res.status(500).send("OAuth initialization failed: " + error.message);
   }
 });
 
@@ -60,26 +96,22 @@ router.get("/auth/callback", async (req, res) => {
 
     const { session } = callback;
 
-    // Save session to MongoDB
-    await Session.findOneAndUpdate(
-      { shop: session.shop },
-      {
-        shop: session.shop,
-        accessToken: session.accessToken,
-        scope: session.scope,
-        isOnline: session.isOnline,
-        expiresAt: session.expires,
-      },
-      { upsert: true, new: true }
-    );
-
     console.log(`✅ OAuth successful for shop: ${session.shop}`);
 
-    // Redirect to app (you can change this to your admin dashboard)
-    res.redirect(`https://${session.shop}/admin/apps`);
+    // Redirect to app
+    res.send(`
+      <html>
+        <head><title>Installation Successful</title></head>
+        <body style="font-family: Arial; text-align: center; padding: 50px;">
+          <h1>✅ App Installed Successfully!</h1>
+          <p>Wholesale Harmony has been installed on ${session.shop}</p>
+          <p><a href="https://${session.shop}/admin/apps">Return to your store</a></p>
+        </body>
+      </html>
+    `);
   } catch (error) {
     console.error("OAuth callback error:", error);
-    res.status(500).send("OAuth failed");
+    res.status(500).send("OAuth failed: " + error.message);
   }
 });
 
