@@ -71,15 +71,17 @@ router.get("/auth", async (req, res) => {
       return res.status(400).send("Invalid shop parameter");
     }
 
-    const authRoute = await shopify.auth.begin({
-      shop,
-      callbackPath: "/api/auth/callback",
-      isOnline: false,
-      rawRequest: req,
-      rawResponse: res,
-    });
+    // Build auth URL manually to avoid cookie issues
+    const authUrl = `https://${shop}/admin/oauth/authorize?client_id=${
+      process.env.SHOPIFY_API_KEY
+    }&scope=${process.env.SHOPIFY_SCOPES}&redirect_uri=${encodeURIComponent(
+      process.env.SHOPIFY_APP_URL + "/api/auth/callback"
+    )}&state=${shop}`;
 
-    res.redirect(authRoute);
+    console.log(`🔐 Starting OAuth for ${shop}`);
+    console.log(`Redirect URL: ${authUrl}`);
+
+    res.redirect(authUrl);
   } catch (error) {
     console.error("OAuth start error:", error);
     res.status(500).send("OAuth initialization failed: " + error.message);
@@ -89,23 +91,49 @@ router.get("/auth", async (req, res) => {
 // ========== OAUTH CALLBACK ==========
 router.get("/auth/callback", async (req, res) => {
   try {
-    const callback = await shopify.auth.callback({
-      rawRequest: req,
-      rawResponse: res,
-    });
+    const { code, shop, state } = req.query;
 
-    const { session } = callback;
+    if (!code || !shop) {
+      throw new Error("Missing required OAuth parameters");
+    }
 
-    console.log(`✅ OAuth successful for shop: ${session.shop}`);
+    console.log(`✅ OAuth callback received for ${shop}`);
 
-    // Redirect to app
+    // Exchange code for access token manually
+    const axios = require("axios");
+    const tokenResponse = await axios.post(
+      `https://${shop}/admin/oauth/access_token`,
+      {
+        client_id: process.env.SHOPIFY_API_KEY,
+        client_secret: process.env.SHOPIFY_API_SECRET,
+        code: code,
+      }
+    );
+
+    const { access_token, scope } = tokenResponse.data;
+
+    // Save to database
+    await Session.findOneAndUpdate(
+      { shop },
+      {
+        shop,
+        accessToken: access_token,
+        scope: scope,
+        isOnline: false,
+      },
+      { upsert: true, new: true }
+    );
+
+    console.log(`✅ OAuth successful! Token saved for ${shop}`);
+
     res.send(`
       <html>
         <head><title>Installation Successful</title></head>
         <body style="font-family: Arial; text-align: center; padding: 50px;">
-          <h1>✅ App Installed Successfully!</h1>
-          <p>Wholesale Harmony has been installed on ${session.shop}</p>
-          <p><a href="https://${session.shop}/admin/apps">Return to your store</a></p>
+          <h1>✅ OAuth Token Updated Successfully!</h1>
+          <p>Your new access token has been saved for ${shop}</p>
+          <p><strong>You can now close this window and check your customers page.</strong></p>
+          <p><a href="https://${shop}/admin">Return to Shopify Admin</a></p>
         </body>
       </html>
     `);
