@@ -1,6 +1,12 @@
 const express = require("express");
 const router = express.Router();
-const { shopifyApi, ApiVersion } = require("@shopify/shopify-api");
+const {
+  shopifyApi,
+  ApiVersion,
+  LATEST_API_VERSION,
+} = require("@shopify/shopify-api");
+const { restResources } = require("@shopify/shopify-api/rest/admin/2024-10");
+require("@shopify/shopify-api/adapters/node");
 const Session = require("../sessionModel");
 
 // Initialize Shopify API
@@ -9,8 +15,9 @@ const shopify = shopifyApi({
   apiSecretKey: process.env.SHOPIFY_API_SECRET,
   scopes: process.env.SHOPIFY_SCOPES.split(","),
   hostName: process.env.SHOPIFY_APP_URL.replace(/https?:\/\//, ""),
-  apiVersion: ApiVersion.October24,
+  apiVersion: LATEST_API_VERSION,
   isEmbeddedApp: false,
+  restResources,
 });
 
 // ========== OAUTH START ==========
@@ -85,4 +92,4 @@ async function getAccessToken(shop) {
   return session.accessToken;
 }
 
-module.exports = { router, getAccessToken };
+module.exports = { router, getAccessToken, shopify };
